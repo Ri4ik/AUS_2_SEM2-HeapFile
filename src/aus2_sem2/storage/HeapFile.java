@@ -4,6 +4,7 @@ import aus2_sem2.model.Record;
 import java.io.RandomAccessFile;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -30,6 +31,9 @@ public class HeapFile<T extends Record> {
     private final List<Integer> freeBlocks;     // полностью пустые блоки (validCount = 0, не в конце файла)
     private final List<Integer> partialBlocks;  // блоки с 0 < validCount < capacity
 
+    // новое: общее количество валидных записей во всём файле
+    private int totalValidRecords;
+
     /**
      * Создаёт/открывает heap-файл.
      *
@@ -43,6 +47,7 @@ public class HeapFile<T extends Record> {
             this.recordClass = recordClass;
             this.freeBlocks = new ArrayList<>();
             this.partialBlocks = new ArrayList<>();
+            this.totalValidRecords = 0;
 
             T tmp = recordClass.getDeclaredConstructor().newInstance();
             this.recordSize = tmp.getSize();
@@ -97,6 +102,11 @@ public class HeapFile<T extends Record> {
         return blockCount;
     }
 
+    // новое: получить общее количество валидных записей
+    public synchronized int getTotalValidRecords() {
+        return totalValidRecords;
+    }
+
     public void close() {
         try {
             raf.close();
@@ -117,6 +127,9 @@ public class HeapFile<T extends Record> {
         return (int) (address & 0xffffffffL);
     }
 
+    /**
+     * Вставка одной записи. Возвращает адрес (blockIndex/slotIndex).
+     */
     public synchronized long insert(T record) {
         if (record == null) {
             throw new IllegalArgumentException("Inserted record cannot be null.");
@@ -154,12 +167,18 @@ public class HeapFile<T extends Record> {
 
             updateListsAfterInsert(block);
 
+            // учёт общего количества записей
+            totalValidRecords++;
+
             return makeAddress(targetBlockIndex, slot);
         } catch (IOException e) {
             throw new IllegalStateException("Error during insert operation", e);
         }
     }
 
+    /**
+     * Чтение записи по адресу.
+     */
     public synchronized T get(long address) {
         int blockIndex = getBlockIndexFromAddress(address);
         int slotIndex = getSlotIndexFromAddress(address);
@@ -179,6 +198,9 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    /**
+     * Удаление записи по адресу.
+     */
     public synchronized boolean delete(long address) {
         int blockIndex = getBlockIndexFromAddress(address);
         int slotIndex = getSlotIndexFromAddress(address);
@@ -197,18 +219,26 @@ public class HeapFile<T extends Record> {
                 return false;
             }
 
-            if (block.isEmpty()) {
-                if (blockIndex == blockCount - 1) {
-                    shrinkFileFromEnd(blockIndex);
-                } else {
-                    writeBlock(block);
-                    removeFromList(partialBlocks, blockIndex);
-                    addToListIfAbsent(freeBlocks, blockIndex);
-                }
-            } else {
-                writeBlock(block);
-                updateListsAfterDelete(block);
-            }
+            // учёт общего количества записей
+            totalValidRecords--;
+
+           if (block.isEmpty()) {
+    // сначала записать пустой блок на диск, чтобы его validCount стал 0 в файле
+    writeBlock(block);
+
+    // потом обрезать хвост — эта функция сама посмотрит на все последние блоки
+    shrinkTrailingEmptyBlocks();
+
+    // если после обрезки наш блок ещё существует (он не был в конце),
+    // тогда он должен быть в списке свободных
+    if (blockIndex < blockCount) {
+        removeFromList(partialBlocks, blockIndex);
+        addToListIfAbsent(freeBlocks, blockIndex);
+    }
+    } else {
+        writeBlock(block);
+        updateListsAfterDelete(block);
+    }
 
             return true;
         } catch (IOException e) {
@@ -216,6 +246,31 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    /**
+     * Вернуть список адресов всех валидных записей (для случайного удаления и т.п.).
+     */
+    public synchronized List<Long> getAllAddresses() {
+        List<Long> result = new ArrayList<>();
+        try {
+            for (int i = 0; i < blockCount; i++) {
+                Block<T> block = readBlock(i);
+                for (int slot = 0; slot < recordsPerBlock; slot++) {
+                    T rec = block.getRecord(slot);
+                    if (rec != null) {
+                        long addr = makeAddress(i, slot);
+                        result.add(addr);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("Error during getAllAddresses()", e);
+        }
+        return result;
+    }
+
+    /**
+     * Для отладочного вывода.
+     */
     public synchronized String dumpDebugInfo() {
         StringBuilder sb = new StringBuilder();
         sb.append("HeapFile debug dump\n");
@@ -224,6 +279,7 @@ public class HeapFile<T extends Record> {
         sb.append("recordSize: ").append(recordSize).append("\n");
         sb.append("recordsPerBlock: ").append(recordsPerBlock).append("\n");
         sb.append("blockCount: ").append(blockCount).append("\n");
+        sb.append("totalValidRecords: ").append(totalValidRecords).append("\n");
         sb.append("freeBlocks: ").append(freeBlocks.toString()).append("\n");
         sb.append("partialBlocks: ").append(partialBlocks.toString()).append("\n");
         sb.append("\n");
@@ -246,8 +302,9 @@ public class HeapFile<T extends Record> {
     }
 
     private void rebuildFreeListsFromFileHeader() throws IOException {
-        freeBlocks.clear();
-        partialBlocks.clear();
+    freeBlocks.clear();
+    partialBlocks.clear();
+    totalValidRecords = 0;
 
         for (int i = 0; i < blockCount; i++) {
             raf.seek((long) i * blockSizeBytes);
@@ -258,18 +315,22 @@ public class HeapFile<T extends Record> {
                 validCount = 0;
             }
 
+            if (validCount < 0 || validCount > recordsPerBlock) {
+                validCount = 0;
+            }
+
+            totalValidRecords += validCount;
+
             if (validCount == 0) {
-                if (i == blockCount - 1) {
-                    shrinkFileFromEnd(i);
-                    break;
-                } else {
-                    freeBlocks.add(i);
-                }
+                freeBlocks.add(i);
             } else if (validCount < recordsPerBlock) {
                 partialBlocks.add(i);
             }
-        }
+        } 
+        // а теперь уже чисто убираем пустые блоки с конца
+        shrinkTrailingEmptyBlocks();
     }
+
 
     private int allocateNewBlockIndex() {
         return blockCount++;
@@ -318,18 +379,48 @@ public class HeapFile<T extends Record> {
         raf.write(data);
     }
 
-    private void shrinkFileFromEnd(int lastIndex) throws IOException {
-        if (lastIndex != blockCount - 1) {
-            return;
+//    private void shrinkFileFromEnd(int lastIndex) throws IOException {
+//        if (lastIndex != blockCount - 1) {
+//            return;
+//        }
+//
+//        blockCount--;
+//        long newLength = (long) blockCount * blockSizeBytes;
+//        raf.setLength(newLength);
+//
+//        removeFromList(freeBlocks, lastIndex);
+//        removeFromList(partialBlocks, lastIndex);
+//    }
+    private void shrinkTrailingEmptyBlocks() throws IOException {
+    while (blockCount > 0) {
+        int lastIndex = blockCount - 1;
+
+        // читаем validCount последнего блока
+        raf.seek((long) lastIndex * blockSizeBytes);
+        int validCount;
+        try {
+            validCount = raf.readInt();
+        } catch (IOException e) {
+            // если не смогли прочитать, выходим, чтобы не повредить файл
+            break;
         }
 
+        // если последний блок НЕ пустой — дальше обрезать нельзя
+        if (validCount != 0) {
+            break;
+        }
+
+        // иначе удаляем этот блок с конца
         blockCount--;
         long newLength = (long) blockCount * blockSizeBytes;
         raf.setLength(newLength);
 
+        // чистим списки freeBlocks/partialBlocks от этого индекса
         removeFromList(freeBlocks, lastIndex);
         removeFromList(partialBlocks, lastIndex);
     }
+}
+
 
     private void updateListsAfterInsert(Block<T> block) {
         int idx = block.getBlockIndex();
