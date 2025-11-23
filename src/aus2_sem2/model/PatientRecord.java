@@ -2,23 +2,27 @@ package aus2_sem2.model;
 
 import aus2_sem2.util.ByteUtils;
 
+/**
+ * Model jedného záznamu pacienta uloženého v heap súbore.
+ * Každý atribút má pevnú dĺžku kvôli jednoduchému ukladaniu do blokov.
+ */
 public class PatientRecord implements Record {
 
-    private String meno;        // 15 chars
-    private String priezvisko;  // 14 chars
-    private String date;        // "DD:MM:RRRR" → 10 chars
-    private String id;          // 10 chars
+    private String meno;        // max 15 znakov
+    private String priezvisko;  // max 14 znakov
+    private String date;        // "DD:MM:RRRR" – 10 znakov
+    private String id;          // unikátne ID pacienta – 10 znakov
 
     public static final int MENO_LEN = 15;
     public static final int PRIEZ_LEN = 14;
-    public static final int DATE_LEN = 10;   // "DD:MM:RRRR"
+    public static final int DATE_LEN = 10;
     public static final int ID_LEN = 10;
 
     public PatientRecord() {
         this.meno = "";
         this.priezvisko = "";
         this.date = "";
-        this.id = "";
+       	this.id = "";
     }
 
     public PatientRecord(String meno, String priezvisko, String date, String id) {
@@ -28,11 +32,13 @@ public class PatientRecord implements Record {
         this.id = id;
     }
 
+    /** Veľkosť záznamu v bajtoch (súčet pevných dĺžok). */
     @Override
     public int getSize() {
         return MENO_LEN + PRIEZ_LEN + DATE_LEN + ID_LEN;
     }
 
+    /** Serializácia záznamu do pevného bajtového poľa. */
     @Override
     public byte[] toByteArray() {
         try {
@@ -51,6 +57,7 @@ public class PatientRecord implements Record {
         }
     }
 
+    /** Načítanie záznamu z pevného bajtového poľa. */
     @Override
     public void fromByteArray(byte[] data) {
         try {
@@ -72,6 +79,7 @@ public class PatientRecord implements Record {
         }
     }
 
+    /** Porovnanie dvoch záznamov podľa všetkých atribútov. */
     @Override
     public boolean equals(Record other) {
         if (!(other instanceof PatientRecord)) return false;
@@ -83,12 +91,13 @@ public class PatientRecord implements Record {
                 && this.id.equals(p.id);
     }
 
+    /** Textová reprezentácia záznamu pre GUI a debug. */
     @Override
     public String toString() {
         return meno + " " + priezvisko + " (" + date + ") ID=" + id;
     }
 
-    // ==== ГЕТТЕРЫ ДЛЯ GUI/ПОИСКА ====
+    // --- gettre pre GUI, controller aj HeapFile ---
 
     public String getMeno() {
         return meno;
@@ -102,6 +111,8 @@ public class PatientRecord implements Record {
         return date;
     }
 
+    /** Používa sa pri kontrole unikátneho ID. */
+    @Override
     public String getId() {
         return id;
     }

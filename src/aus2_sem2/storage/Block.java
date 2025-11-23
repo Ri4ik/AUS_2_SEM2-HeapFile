@@ -8,36 +8,23 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 
 /**
- * Один блок heap-файла на диске.
- * Хранит фиксированное количество записей T фиксированного размера.
- * Формат блока в байтах:
- *
- * [int validCount]
- * затем для каждого слота:
- *   [byte flagUsed] (0 = пустой, 1 = занято)
- *   [recordSize байт данных записи (или нули, если flagUsed == 0)]
+ * Jeden logický blok heap súboru na disku.
+ * Uchováva pevný počet záznamov typu T v pamäti aj v serializovanej forme.
  */
 public class Block<T extends Record> {
 
-    private final int blockIndex;     // индекс блока в файле (0,1,2,...)
-    private final int capacity;       // сколько записей помещается в блок
-    private final int recordSize;     // размер одной записи в байтах
-    private final Class<T> recordClass;
+    private final int blockIndex;   // index bloku v súbore
+    private final int capacity;     // max. počet záznamov v bloku
+    private final int recordSize;   // veľkosť jedného záznamu v bajtoch
+    private final Class<T> recordClass; // typ záznamu kvôli vytváraniu inštancií
 
-    private int validCount;           // количество реально занятых записей
+    private int validCount;         // počet platných (ne-null) záznamov
     @SuppressWarnings("unchecked")
-    private final T[] records;        // массив записей (null = свободный слот)
+    private final T[] records;      // pole záznamov v danom bloku
 
     /**
-     * Конструктор для создания нового (пустого) блока.
-     *
-     * @param blockIndex индекс блока в файле
-     * @param capacity   количество записей в блоке
-     * @param recordSize размер одной записи в байтах
-     * @param recordClass класс реализации Record (например PatientRecord.class)
-     * @param initializeEmpty если true - создаётся полностью пустой блок
+     * Konštruktor pre blok s možnosťou inicializácie ako „prázdny“.
      */
-    @SuppressWarnings("unchecked")
     public Block(int blockIndex, int capacity, int recordSize, Class<T> recordClass, boolean initializeEmpty) {
         this.blockIndex = blockIndex;
         this.capacity = capacity;
@@ -54,7 +41,7 @@ public class Block<T extends Record> {
     }
 
     /**
-     * Конструктор для дальнейшего заполнения из fromByteArray().
+     * Konštruktor používaný pri načítaní bloku zo súboru.
      */
     @SuppressWarnings("unchecked")
     public Block(int blockIndex, int capacity, int recordSize, Class<T> recordClass) {
@@ -82,18 +69,20 @@ public class Block<T extends Record> {
         return validCount;
     }
 
+    /** Blok je plný, ak nemá žiadny voľný slot. */
     public boolean isFull() {
         return validCount >= capacity;
     }
 
+    /** Blok je prázdny, ak neobsahuje žiadny záznam. */
     public boolean isEmpty() {
         return validCount == 0;
     }
 
     /**
-     * Вставка записи в первый свободный слот.
-     * @param rec запись
-     * @return индекс слота [0..capacity-1], либо -1 если нет места
+     * Vloží záznam do prvého voľného slotu.
+     *
+     * @return index slotu alebo -1, ak je blok plný
      */
     public int insert(T rec) {
         if (rec == null) {
@@ -112,9 +101,7 @@ public class Block<T extends Record> {
         return -1;
     }
 
-    /**
-     * Получить запись по индексу слота.
-     */
+    /** Vráti záznam na danom indexe v bloku. */
     public T getRecord(int index) {
         if (index < 0 || index >= capacity) {
             throw new IndexOutOfBoundsException("Record index out of range: " + index);
@@ -123,8 +110,9 @@ public class Block<T extends Record> {
     }
 
     /**
-     * Удалить запись по индексу слота.
-     * @return true, если запись была, false если и так пусто.
+     * Zmaže záznam na danom indexe (nastaví na null).
+     *
+     * @return true, ak bol záznam reálne prítomný a zmazaný
      */
     public boolean delete(int index) {
         if (index < 0 || index >= capacity) {
@@ -139,21 +127,26 @@ public class Block<T extends Record> {
     }
 
     /**
-     * Сериализация блока в массив байтов фиксированной длины.
+     * Serializuje celý blok do poľa bajtov.
+     * Formát:
+     * <pre>
+     *   int validCount;
+     *   pre každý slot:
+     *     byte flag (1 = obsadený, 0 = prázdny)
+     *     recordSize bajtov (dáta záznamu alebo prázdne pole)
+     * </pre>
      */
     public byte[] toByteArray() {
         try {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             DataOutputStream dos = new DataOutputStream(baos);
 
-            // 1) validCount
             dos.writeInt(validCount);
 
-            // 2) слоты
             for (int i = 0; i < capacity; i++) {
                 T rec = records[i];
                 if (rec != null) {
-                    dos.writeByte(1); // используется
+                    dos.writeByte(1);
                     byte[] data = rec.toByteArray();
                     if (data.length != recordSize) {
                         throw new IllegalStateException(
@@ -162,8 +155,7 @@ public class Block<T extends Record> {
                     }
                     dos.write(data);
                 } else {
-                    dos.writeByte(0); // пустой слот
-                    // записываем пустые байты чтобы сохранить фиксированный размер блока
+                    dos.writeByte(0);
                     byte[] empty = new byte[recordSize];
                     dos.write(empty);
                 }
@@ -176,18 +168,15 @@ public class Block<T extends Record> {
     }
 
     /**
-     * Десериализация блока из массива байтов.
-     * Размер массива должен соответствовать полному размеру блока.
+     * Naplní blok z dodaného poľa bajtov v rovnakom formáte, ako vytvára toByteArray().
      */
     public void fromByteArray(byte[] data) {
         try {
             ByteArrayInputStream bais = new ByteArrayInputStream(data);
             DataInputStream dis = new DataInputStream(bais);
 
-            // 1) validCount
             this.validCount = dis.readInt();
 
-            // 2) слоты
             for (int i = 0; i < capacity; i++) {
                 byte flag = dis.readByte();
                 byte[] recBytes = new byte[recordSize];
@@ -207,7 +196,8 @@ public class Block<T extends Record> {
     }
 
     /**
-     * Внутренний хелпер: создать пустой экземпляр T через reflection.
+     * Vytvorí „prázdnu“ inštanciu záznamu typu T pomocou reflexie.
+     * Používa sa pri deserializácii z bajtového poľa.
      */
     private T createEmptyRecord() {
         try {
@@ -218,7 +208,7 @@ public class Block<T extends Record> {
     }
 
     /**
-     * Удобная строка для отладочного вывода содержимого блока.
+     * Textový debug výpis obsahu bloku (index, validCount a všetky sloty).
      */
     public String debugString() {
         StringBuilder sb = new StringBuilder();

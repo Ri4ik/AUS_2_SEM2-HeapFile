@@ -4,43 +4,28 @@ import aus2_sem2.model.Record;
 import java.io.RandomAccessFile;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
- * Реализация неупорядоченного файла (heap file) на диске.
- *
- * Использует фиксированные блоки одинакового размера.
- * Адрес записи кодируется как long: старшие 32 бита = индекс блока,
- * младшие 32 бита = индекс слота внутри блока.
- *
- * Формат блока описан в Block<T>.
+ * Neutriedený heap súbor na disku (blokovo orientované uloženie záznamov).
  */
 public class HeapFile<T extends Record> {
 
-    private final String filePath;
-    private final Class<T> recordClass;
-    private final RandomAccessFile raf;
+    private final String filePath;          // cesta k súboru na disku
+    private final Class<T> recordClass;    // typ záznamu (kvôli reflexii)
+    private final RandomAccessFile raf;    // nízkoúrovňový prístup k súboru
 
-    private final int recordSize;
-    private final int recordsPerBlock;
-    private int blockSizeBytes;            // фактический размер блока в байтах
+    private final int recordSize;          // veľkosť jedného záznamu
+    private final int recordsPerBlock;     // počet záznamov v jednom bloku
+    private int blockSizeBytes;            // veľkosť bloku v bajtoch
 
-    private int blockCount;                // количество блоков в файле
+    private int blockCount;                // aktuálny počet blokov v súbore
 
-    private final List<Integer> freeBlocks;     // полностью пустые блоки (validCount = 0, не в конце файла)
-    private final List<Integer> partialBlocks;  // блоки с 0 < validCount < capacity
+    private final List<Integer> freeBlocks;    // úplne prázdne bloky
+    private final List<Integer> partialBlocks; // čiastočne zaplnené bloky
 
-    // новое: общее количество валидных записей во всём файле
-    private int totalValidRecords;
+    private int totalValidRecords;         // počet platných záznamov v celom súbore
 
-    /**
-     * Создаёт/открывает heap-файл.
-     *
-     * @param filePath путь к файлу
-     * @param clusterSizeBytes желаемый размер кластера/блока (например 4096)
-     * @param recordClass класс записи (например PatientRecord.class)
-     */
     public HeapFile(String filePath, int clusterSizeBytes, Class<T> recordClass) {
         try {
             this.filePath = filePath;
@@ -49,6 +34,7 @@ public class HeapFile<T extends Record> {
             this.partialBlocks = new ArrayList<>();
             this.totalValidRecords = 0;
 
+            // zistíme veľkosť záznamu z prázdnej inštancie
             T tmp = recordClass.getDeclaredConstructor().newInstance();
             this.recordSize = tmp.getSize();
 
@@ -59,6 +45,7 @@ public class HeapFile<T extends Record> {
                 throw new IllegalStateException("Record size must be positive.");
             }
 
+            // výpočet kapacity: 4 bajty validCount + (flag + data) pre každý záznam
             int tempCapacity = (clusterSizeBytes - 4) / (1 + recordSize);
             if (tempCapacity <= 0) {
                 throw new IllegalStateException(
@@ -69,9 +56,11 @@ public class HeapFile<T extends Record> {
             this.recordsPerBlock = tempCapacity;
             this.blockSizeBytes = 4 + recordsPerBlock * (1 + recordSize);
 
+            // otvorenie / vytvorenie súboru
             this.raf = new RandomAccessFile(filePath, "rw");
 
             long len = raf.length();
+            // zarovnanie dĺžky súboru na násobok veľkosti bloku
             if (len % blockSizeBytes != 0) {
                 long newLen = (len / blockSizeBytes) * blockSizeBytes;
                 raf.setLength(newLen);
@@ -80,6 +69,7 @@ public class HeapFile<T extends Record> {
 
             this.blockCount = (int) (len / blockSizeBytes);
 
+            // obnovíme zoznam voľných / čiastočných blokov zo súboru
             rebuildFreeListsFromFileHeader();
         } catch (Exception e) {
             throw new IllegalStateException("Error initializing HeapFile: " + e.getMessage(), e);
@@ -102,7 +92,6 @@ public class HeapFile<T extends Record> {
         return blockCount;
     }
 
-    // новое: получить общее количество валидных записей
     public synchronized int getTotalValidRecords() {
         return totalValidRecords;
     }
@@ -115,6 +104,7 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    // skladanie adresy (blok, slot) do jedného long
     public static long makeAddress(int blockIndex, int slotIndex) {
         return (((long) blockIndex) << 32) | (slotIndex & 0xffffffffL);
     }
@@ -127,8 +117,11 @@ public class HeapFile<T extends Record> {
         return (int) (address & 0xffffffffL);
     }
 
+    // ==== základná INSERT bez kontroly unikátnosti ID ====
+
     /**
-     * Вставка одной записи. Возвращает адрес (blockIndex/slotIndex).
+     * Vloží záznam do súboru (bez kontroly duplicitného ID).
+     * Vyberá vhodný blok podľa zoznamov partialBlocks/freeBlocks alebo alokuje nový.
      */
     public synchronized long insert(T record) {
         if (record == null) {
@@ -138,6 +131,7 @@ public class HeapFile<T extends Record> {
         try {
             int targetBlockIndex;
 
+            // preferujeme čiastočne zaplnený blok, potom úplne prázdny
             if (!partialBlocks.isEmpty()) {
                 targetBlockIndex = partialBlocks.get(0);
             } else if (!freeBlocks.isEmpty()) {
@@ -147,6 +141,7 @@ public class HeapFile<T extends Record> {
             }
 
             Block<T> block;
+            // buď blok načítame, alebo vytvoríme nový
             if (targetBlockIndex < blockCount - 1 || targetBlockIndex < existingBlockCountFromLength()) {
                 block = readBlock(targetBlockIndex);
             } else {
@@ -155,6 +150,7 @@ public class HeapFile<T extends Record> {
 
             int slot = block.insert(record);
             if (slot < 0) {
+                // fallback – ak je blok plný, hľadáme ďalší
                 block = findOrCreateBlockForInsert(record);
                 targetBlockIndex = block.getBlockIndex();
                 slot = block.insert(record);
@@ -164,10 +160,7 @@ public class HeapFile<T extends Record> {
             }
 
             writeBlock(block);
-
             updateListsAfterInsert(block);
-
-            // учёт общего количества записей
             totalValidRecords++;
 
             return makeAddress(targetBlockIndex, slot);
@@ -176,8 +169,28 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    // ==== INSERT s kontrolou unikátneho ID (vráti -1 ak ID už existuje) ====
+
     /**
-     * Чтение записи по адресу.
+     * Vloží záznam len v prípade, že v súbore ešte neexistuje záznam s daným ID.
+     *
+     * @return adresa záznamu alebo -1, ak ID už existuje
+     */
+    public synchronized long insertUnique(T record) {
+        if (record == null) {
+            throw new IllegalArgumentException("Inserted record cannot be null.");
+        }
+        String id = record.getId();
+        if (id != null && existsId(id)) {
+            return -1L;
+        }
+        return insert(record);
+    }
+
+    // ==== ČÍTANIE ====
+
+    /**
+     * Vráti záznam na danej adrese (blok, slot) alebo null, ak adresa nie je platná.
      */
     public synchronized T get(long address) {
         int blockIndex = getBlockIndexFromAddress(address);
@@ -198,8 +211,11 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    // ==== MAZANIE ====
+
     /**
-     * Удаление записи по адресу.
+     * Zmaže záznam na danej adrese. Pri vyprázdnení posledných blokov
+     * sa súbor skráti (shrinkTrailingEmptyBlocks).
      */
     public synchronized boolean delete(long address) {
         int blockIndex = getBlockIndexFromAddress(address);
@@ -219,26 +235,21 @@ public class HeapFile<T extends Record> {
                 return false;
             }
 
-            // учёт общего количества записей
             totalValidRecords--;
 
-           if (block.isEmpty()) {
-    // сначала записать пустой блок на диск, чтобы его validCount стал 0 в файле
-    writeBlock(block);
-
-    // потом обрезать хвост — эта функция сама посмотрит на все последние блоки
-    shrinkTrailingEmptyBlocks();
-
-    // если после обрезки наш блок ещё существует (он не был в конце),
-    // тогда он должен быть в списке свободных
-    if (blockIndex < blockCount) {
-        removeFromList(partialBlocks, blockIndex);
-        addToListIfAbsent(freeBlocks, blockIndex);
-    }
-    } else {
-        writeBlock(block);
-        updateListsAfterDelete(block);
-    }
+            if (block.isEmpty()) {
+                // prázdny blok – zapíšeme stav a prípadne skrátime súbor
+                writeBlock(block);
+                shrinkTrailingEmptyBlocks();
+                if (blockIndex < blockCount) {
+                    removeFromList(partialBlocks, blockIndex);
+                    addToListIfAbsent(freeBlocks, blockIndex);
+                }
+            } else {
+                // blok nie je prázdny – len aktualizujeme zoznamy
+                writeBlock(block);
+                updateListsAfterDelete(block);
+            }
 
             return true;
         } catch (IOException e) {
@@ -246,8 +257,34 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    // ==== ZISTENIE, ČI EXISTUJE DANÉ ID V SÚBORE ====
+
     /**
-     * Вернуть список адресов всех валидных записей (для случайного удаления и т.п.).
+     * Sekvenčne prehľadá všetky bloky a zistí, či existuje záznam s daným ID.
+     */
+    public synchronized boolean existsId(String id) {
+        if (id == null || id.isEmpty()) return false;
+
+        try {
+            for (int i = 0; i < blockCount; i++) {
+                Block<T> block = readBlock(i);
+                for (int slot = 0; slot < recordsPerBlock; slot++) {
+                    T rec = block.getRecord(slot);
+                    if (rec != null && id.equals(rec.getId())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        } catch (IOException e) {
+            throw new IllegalStateException("Error during existsId()", e);
+        }
+    }
+
+    // ==== ZOZNAM VŠETKÝCH ADRIES ====
+
+    /**
+     * Vráti zoznam adries všetkých platných záznamov v súbore.
      */
     public synchronized List<Long> getAllAddresses() {
         List<Long> result = new ArrayList<>();
@@ -268,8 +305,10 @@ public class HeapFile<T extends Record> {
         return result;
     }
 
+    // ==== DEBUG DUMP ====
+
     /**
-     * Для отладочного вывода.
+     * Textový debug výpis celého súboru – základné parametre + obsah každého bloku.
      */
     public synchronized String dumpDebugInfo() {
         StringBuilder sb = new StringBuilder();
@@ -296,15 +335,23 @@ public class HeapFile<T extends Record> {
         return sb.toString();
     }
 
+    // ==== INTERNAL UTILS ====
+
+
+    /** Zistí počet existujúcich blokov podľa dĺžky súboru. */
     private int existingBlockCountFromLength() throws IOException {
         long len = raf.length();
         return (int) (len / blockSizeBytes);
     }
 
+    /**
+     * Načíta z hlavičiek blokov hodnotu validCount a podľa toho doplní
+     * freeBlocks a partialBlocks. Zároveň dopočíta totalValidRecords.
+     */
     private void rebuildFreeListsFromFileHeader() throws IOException {
-    freeBlocks.clear();
-    partialBlocks.clear();
-    totalValidRecords = 0;
+        freeBlocks.clear();
+        partialBlocks.clear();
+        totalValidRecords = 0;
 
         for (int i = 0; i < blockCount; i++) {
             raf.seek((long) i * blockSizeBytes);
@@ -326,16 +373,21 @@ public class HeapFile<T extends Record> {
             } else if (validCount < recordsPerBlock) {
                 partialBlocks.add(i);
             }
-        } 
-        // а теперь уже чисто убираем пустые блоки с конца
+        }
+
+        // odstráni prázdne bloky na konci súboru
         shrinkTrailingEmptyBlocks();
     }
 
-
+    /** Alokuje index pre nový blok (logicky ho pridá na koniec). */
     private int allocateNewBlockIndex() {
         return blockCount++;
     }
 
+    /**
+     * Nájde alebo vytvorí blok vhodný na vloženie nového záznamu.
+     * Preferuje partialBlocks, potom freeBlocks, inak alokuje nový.
+     */
     private Block<T> findOrCreateBlockForInsert(T record) throws IOException {
         if (!partialBlocks.isEmpty()) {
             int bi = partialBlocks.get(0);
@@ -351,6 +403,9 @@ public class HeapFile<T extends Record> {
         return new Block<>(newIndex, recordsPerBlock, recordSize, recordClass, true);
     }
 
+    /**
+     * Načíta jeden blok z disku podľa indexu.
+     */
     private Block<T> readBlock(int blockIndex) throws IOException {
         if (blockIndex < 0 || blockIndex >= blockCount) {
             throw new IndexOutOfBoundsException("Block index out of range: " + blockIndex);
@@ -368,6 +423,9 @@ public class HeapFile<T extends Record> {
         return block;
     }
 
+    /**
+     * Zapíše jeden blok na disk na jeho pozíciu.
+     */
     private void writeBlock(Block<T> block) throws IOException {
         byte[] data = block.toByteArray();
         if (data.length != blockSizeBytes) {
@@ -379,49 +437,37 @@ public class HeapFile<T extends Record> {
         raf.write(data);
     }
 
-//    private void shrinkFileFromEnd(int lastIndex) throws IOException {
-//        if (lastIndex != blockCount - 1) {
-//            return;
-//        }
-//
-//        blockCount--;
-//        long newLength = (long) blockCount * blockSizeBytes;
-//        raf.setLength(newLength);
-//
-//        removeFromList(freeBlocks, lastIndex);
-//        removeFromList(partialBlocks, lastIndex);
-//    }
+    /**
+     * Orezáva (skracuje) súbor o posledné prázdne bloky.
+     * Posledný blok nikdy nesmie zostať prázdny kvôli zadaniu.
+     */
     private void shrinkTrailingEmptyBlocks() throws IOException {
-    while (blockCount > 0) {
-        int lastIndex = blockCount - 1;
+        while (blockCount > 0) {
+            int lastIndex = blockCount - 1;
+            raf.seek((long) lastIndex * blockSizeBytes);
+            int validCount;
+            try {
+                validCount = raf.readInt();
+            } catch (IOException e) {
+                break;
+            }
 
-        // читаем validCount последнего блока
-        raf.seek((long) lastIndex * blockSizeBytes);
-        int validCount;
-        try {
-            validCount = raf.readInt();
-        } catch (IOException e) {
-            // если не смогли прочитать, выходим, чтобы не повредить файл
-            break;
+            if (validCount != 0) {
+                break;
+            }
+
+            blockCount--;
+            long newLength = (long) blockCount * blockSizeBytes;
+            raf.setLength(newLength);
+
+            removeFromList(freeBlocks, lastIndex);
+            removeFromList(partialBlocks, lastIndex);
         }
-
-        // если последний блок НЕ пустой — дальше обрезать нельзя
-        if (validCount != 0) {
-            break;
-        }
-
-        // иначе удаляем этот блок с конца
-        blockCount--;
-        long newLength = (long) blockCount * blockSizeBytes;
-        raf.setLength(newLength);
-
-        // чистим списки freeBlocks/partialBlocks от этого индекса
-        removeFromList(freeBlocks, lastIndex);
-        removeFromList(partialBlocks, lastIndex);
     }
-}
 
-
+    /**
+     * Aktualizácia zoznamov freeBlocks/partialBlocks po vkladaní.
+     */
     private void updateListsAfterInsert(Block<T> block) {
         int idx = block.getBlockIndex();
         if (block.isFull()) {
@@ -435,6 +481,9 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    /**
+     * Aktualizácia zoznamov freeBlocks/partialBlocks po mazaní.
+     */
     private void updateListsAfterDelete(Block<T> block) {
         int idx = block.getBlockIndex();
         if (block.isEmpty()) {
@@ -449,10 +498,12 @@ public class HeapFile<T extends Record> {
         }
     }
 
+    /** Odstráni hodnotu zo zoznamu, ak tam je. */
     private void removeFromList(List<Integer> list, int value) {
         list.remove(Integer.valueOf(value));
     }
 
+    /** Pridá hodnotu do zoznamu len vtedy, ak tam ešte nie je. */
     private void addToListIfAbsent(List<Integer> list, int value) {
         if (!list.contains(value)) {
             list.add(value);

@@ -1,12 +1,19 @@
 package aus2_sem2.util;
 
-import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
+/**
+ * Pomocné utilitné metódy pre prácu s pevne dlhými textovými poliami.
+ * Slúži na konverziu String <-> fixné pole bajtov.
+ */
 public class ByteUtils {
 
-    // фиксированная строка -> байты фиксированной длины
+    /** 
+     * Konvertuje reťazec na pole bajtov pevnej dĺžky.
+     * Ak je reťazec kratší, zvyšok sa vyplní nulami.
+     * Ak je dlhší, oreže sa na danú dĺžku.
+     */
     public static byte[] toFixedBytes(String s, int length) {
         byte[] result = new byte[length];
         byte[] raw = s.getBytes(StandardCharsets.UTF_8);
@@ -14,11 +21,13 @@ public class ByteUtils {
         int copyLen = Math.min(raw.length, length);
         System.arraycopy(raw, 0, result, 0, copyLen);
 
-        // если строка меньше, остаток будет нулями
         return result;
     }
 
-    // чтение строки фиксированной длины
+    /**
+     * Načíta reťazec z pevne dlhého poľa bajtov.
+     * Odstráni koncové nulové bajty, ktoré slúžia ako padding.
+     */
     public static String fromFixedBytes(byte[] data, int offset, int length) {
         byte[] slice = Arrays.copyOfRange(data, offset, offset + length);
 

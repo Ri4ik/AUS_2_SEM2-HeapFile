@@ -1,7 +1,7 @@
 package aus2_sem2.test;
 
+import aus2_sem2.controller.PatientFileController;
 import aus2_sem2.model.PatientRecord;
-import aus2_sem2.storage.HeapFile;
 
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -11,22 +11,16 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.util.List;
-import java.util.Random;
-import java.util.ArrayList;
-import java.util.Collections;
 import javax.swing.*;
 
 /**
- * GUI-окно для просмотра heap-filu,
- * generovania/mazania náhodných záznamov,
- * vloženia/zmazania konkrétnej záznamu
- * + tlačidlo "Test funkcionality" (vloží 10 a zmaže 4 z nich).
+ * GUI pre zobrazenie a testovanie heap súboru pacientov.
+ * View komunikuje iba cez PatientFileController.
  */
 public class FileDumpViewer extends JFrame {
 
-    private final HeapFile<PatientRecord> heapFile;
-    private final JTextArea textArea;
+    private final PatientFileController controller;   // prepojenie na logiku (controller)
+    private final JTextArea textArea;                 // výpis dumpu súboru
 
     private final JButton refreshButton;
 
@@ -37,32 +31,32 @@ public class FileDumpViewer extends JFrame {
     private final JTextField deleteCountField;
     private final JButton deleteButton;
 
-    // поля для ВСТАВКИ/УДАЛЕНИЯ КОНКРЕТНОЙ ЗАПИСИ
     private final JTextField menoField;
     private final JTextField priezField;
-    private final JTextField dateField;  // format: DD:MM:RRRR
+    private final JTextField dateField;
     private final JTextField idField;
     private final JButton insertOneButton;
     private final JButton deleteByIdButton;
 
-    // нова кнопка: тест функционала
     private final JButton testButton;
 
-    private final Random random;
+    private final JTextField uniqueCountField;
+    private final JButton insertRandomUniqueButton;
+    private final JButton insertOneUniqueButton;
 
-    public FileDumpViewer(HeapFile<PatientRecord> heapFile) {
+    public FileDumpViewer(PatientFileController controller) {
         super("Heap File Dump Viewer");
+        this.controller = controller;
 
-        this.heapFile = heapFile;
         this.textArea = new JTextArea();
 
         this.refreshButton = new JButton("Refresh dump");
 
-        this.insertCountField = new JTextField("10", 8);
+        this.insertCountField = new JTextField("10", 6);
         this.insertButton = new JButton("Insert random");
 
         this.deleteLimitLabel = new JLabel("Delete count (max 0):");
-        this.deleteCountField = new JTextField("5", 8);
+        this.deleteCountField = new JTextField("5", 6);
         this.deleteButton = new JButton("Delete random");
 
         this.menoField = new JTextField(10);
@@ -74,13 +68,16 @@ public class FileDumpViewer extends JFrame {
 
         this.testButton = new JButton("Test funkcionality");
 
-        this.random = new Random();
+        this.uniqueCountField = new JTextField("5", 6);
+        this.insertRandomUniqueButton = new JButton("Insert random UNIQUE");
+        this.insertOneUniqueButton = new JButton("Insert one UNIQUE");
 
-        initUi();
-        registerListeners();
-        refreshDump();
+        initUi();           // inicializácia vzhľadu GUI
+        registerListeners(); // pripojenie handlerov na tlačidlá
+        refreshDump();      // prvotné načítanie dumpu
     }
 
+    /** Nastavenie layoutu, panelov a komponentov. */
     private void initUi() {
         setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout());
@@ -89,7 +86,7 @@ public class FileDumpViewer extends JFrame {
         textArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
 
         JScrollPane scrollPane = new JScrollPane(textArea);
-        scrollPane.setPreferredSize(new Dimension(1000, 600));
+        scrollPane.setPreferredSize(new Dimension(1100, 650));
 
         add(scrollPane, BorderLayout.CENTER);
 
@@ -98,7 +95,7 @@ public class FileDumpViewer extends JFrame {
         gbc.insets = new Insets(4, 4, 4, 4);
         gbc.anchor = GridBagConstraints.WEST;
 
-        // ==== ПЕРВАЯ СТРОКА: массовые вставка/удаление + refresh + test ====
+        // 1. riadok: obyčajné random insert/delete + refresh + test
         gbc.gridy = 0;
         gbc.gridx = 0;
         controlPanel.add(new JLabel("Insert count:"), gbc);
@@ -133,7 +130,7 @@ public class FileDumpViewer extends JFrame {
         gbc.gridx++;
         controlPanel.add(testButton, gbc);
 
-        // ==== ВТОРАЯ СТРОКА: конкретная запись ====
+        // 2. riadok: konkrétna jedna obyčajná insert + delete by ID
         gbc.gridy = 1;
         gbc.gridx = 0;
         controlPanel.add(new JLabel("Meno:"), gbc);
@@ -165,44 +162,65 @@ public class FileDumpViewer extends JFrame {
         gbc.gridx++;
         controlPanel.add(deleteByIdButton, gbc);
 
+        // 3. riadok: UNIKÁTNE vkladanie
+        gbc.gridy = 2;
+        gbc.gridx = 0;
+        controlPanel.add(new JLabel("Unique random count:"), gbc);
+
+        gbc.gridx++;
+        controlPanel.add(uniqueCountField, gbc);
+
+        gbc.gridx++;
+        controlPanel.add(insertRandomUniqueButton, gbc);
+
+        gbc.gridx++;
+        controlPanel.add(Box.createHorizontalStrut(10), gbc);
+
+        gbc.gridx++;
+        controlPanel.add(insertOneUniqueButton, gbc);
+
         add(controlPanel, BorderLayout.SOUTH);
 
         pack();
         setLocationRelativeTo(null);
     }
 
+    /** Registrácia action listenerov pre tlačidlá a okno. */
     private void registerListeners() {
         refreshButton.addActionListener(e -> refreshDump());
         insertButton.addActionListener(e -> handleInsertRandom());
         deleteButton.addActionListener(e -> handleDeleteRandom());
         insertOneButton.addActionListener(e -> handleInsertOne());
         deleteByIdButton.addActionListener(e -> handleDeleteById());
-
-        // новая логика: тест функционала
         testButton.addActionListener(e -> handleTestFunctional());
+        insertRandomUniqueButton.addActionListener(e -> handleInsertRandomUnique());
+        insertOneUniqueButton.addActionListener(e -> handleInsertOneUnique());
 
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                heapFile.close();
+                // HeapFile sa zatvára v main-e, tu netreba nič riešiť
             }
         });
     }
 
+    /** Načíta aktuálny dump z controlleru a obnoví textové okno + label pre mazanie. */
     private void refreshDump() {
-        String dump = heapFile.dumpDebugInfo();
+        String dump = controller.getDump();
         textArea.setText(dump);
         textArea.setCaretPosition(0);
         updateDeleteLimitLabel();
     }
 
+    /** Aktualizuje text labelu pre max. počet zmazaní podľa počtu záznamov. */
     private void updateDeleteLimitLabel() {
-        int total = heapFile.getTotalValidRecords();
+        int total = controller.getTotalRecords();
         deleteLimitLabel.setText("Delete count (max " + total + "):");
     }
 
-    // ================== МАССОВАЯ ВСТАВКА ==================
+    // --- obyčajný random insert ---
 
+    /** Handler pre vloženie náhodných záznamov (bez unikátnej kontroly). */
     private void handleInsertRandom() {
         String text = insertCountField.getText().trim();
         int count;
@@ -224,16 +242,13 @@ public class FileDumpViewer extends JFrame {
             return;
         }
 
-        for (int i = 0; i < count; i++) {
-            PatientRecord rec = generateRandomRecord();
-            heapFile.insert(rec);
-        }
-
+        controller.insertRandomRecords(count);
         refreshDump();
     }
 
-    // ================== МАССОВОЕ УДАЛЕНИЕ ==================
+    // --- obyčajné random delete ---
 
+    /** Handler pre náhodné mazanie záznamov. */
     private void handleDeleteRandom() {
         String text = deleteCountField.getText().trim();
         int count;
@@ -255,35 +270,20 @@ public class FileDumpViewer extends JFrame {
             return;
         }
 
-        int total = heapFile.getTotalValidRecords();
-        if (count > total) {
+        int removed = controller.deleteRandomRecords(count);
+        if (removed < count) {
             JOptionPane.showMessageDialog(this,
-                    "В системе только " + total + " записей. Нельзя удалить " + count + ".",
-                    "Limit error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        List<Long> addresses = heapFile.getAllAddresses();
-        if (addresses.size() < count) {
-            JOptionPane.showMessageDialog(this,
-                    "Найдено только " + addresses.size() + " валидных адресов. Нельзя удалить " + count + ".",
-                    "Limit error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        Collections.shuffle(addresses, random);
-        for (int i = 0; i < count; i++) {
-            long addr = addresses.get(i);
-            heapFile.delete(addr);
+                    "Zmazaných " + removed + " z " + count + ".",
+                    "Info",
+                    JOptionPane.INFORMATION_MESSAGE);
         }
 
         refreshDump();
     }
 
-    // ================== ВСТАВКА КОНКРЕТНОЙ ЗАПИСИ ==================
+    // --- obyčajná jedna insert ---
 
+    /** Handler pre vloženie jednej konkrétnej (neunikátnej) pacientskej karty. */
     private void handleInsertOne() {
         String meno = menoField.getText().trim();
         String priez = priezField.getText().trim();
@@ -307,13 +307,13 @@ public class FileDumpViewer extends JFrame {
         }
 
         PatientRecord rec = new PatientRecord(meno, priez, date, id);
-        heapFile.insert(rec);
-
+        controller.insertRecord(rec);
         refreshDump();
     }
 
-    // ================== УДАЛЕНИЕ КОНКРЕТНОЙ ЗАПИСИ ПО ID ==================
+    // --- delete by ID ---
 
+    /** Handler pre zmazanie záznamu podľa ID pacienta. */
     private void handleDeleteById() {
         String id = idField.getText().trim();
 
@@ -325,18 +325,7 @@ public class FileDumpViewer extends JFrame {
             return;
         }
 
-        List<Long> addresses = heapFile.getAllAddresses();
-        boolean deleted = false;
-
-        for (long addr : addresses) {
-            PatientRecord rec = heapFile.get(addr);
-            if (rec != null && id.equals(rec.getId())) {
-                heapFile.delete(addr);
-                deleted = true;
-                break; // удаляем только первую совпавшую запись
-            }
-        }
-
+        boolean deleted = controller.deleteById(id);
         if (!deleted) {
             JOptionPane.showMessageDialog(this,
                     "Záznam s ID = " + id + " sa nenašiel.",
@@ -347,57 +336,87 @@ public class FileDumpViewer extends JFrame {
         refreshDump();
     }
 
-    // ================== TEST FUNKCIONALITY ==================
+    // --- test funkcionality (10 insert, 4 delete) ---
 
-    /**
-     * Вставляет 10 записей, затем удаляет 4 из них.
-     * Для наглядности: записи будут с предсказуемыми данными.
-     */
+    /** Spustí interný test funkcionality v controlleri. */
     private void handleTestFunctional() {
-        List<Long> addrs = new ArrayList<>();
-
-        // 1) Вставляем 10 тестовых записей
-        for (int i = 0; i < 10; i++) {
-            String meno = "TestM" + i;
-            String priez = "TestP" + i;
-            String date = String.format("%02d:%02d:%04d", (i % 28) + 1, (i % 12) + 1, 2000 + i);
-            String id = String.format("TST%07d", i);
-
-            PatientRecord rec = new PatientRecord(meno, priez, date, id);
-            long addr = heapFile.insert(rec);
-            addrs.add(addr);
-        }
-
-        // 2) Удаляем 4 из них: например записи с индексами 1, 3, 5, 7 (если хватает)
-        int[] toDeleteIdx = {1, 3, 5, 7};
-        for (int idx : toDeleteIdx) {
-            if (idx < addrs.size()) {
-                long addr = addrs.get(idx);
-                heapFile.delete(addr);
-            }
-        }
-
+        controller.runFunctionalTest();
         refreshDump();
-
         JOptionPane.showMessageDialog(this,
-                "Test funkcionality: vložených 10 záznamov, zmazané 4 z nich.",
+                "Test funkcionality: vložených 10 záznamov (obyčajne), zmazané 4 z nich.",
                 "Test",
                 JOptionPane.INFORMATION_MESSAGE);
     }
 
-    // ================== ГЕНЕРАЦИЯ СЛУЧАЙНОЙ ЗАПИСИ ==================
+    // --- UNIQUE random insert ---
 
-    private PatientRecord generateRandomRecord() {
-        int year = 1950 + random.nextInt(60);   // 1950..2009
-        int month = 1 + random.nextInt(12);     // 1..12
-        int day = 1 + random.nextInt(28);       // 1..28
+    /** Handler pre náhodné vkladanie záznamov s kontrolou unikátneho ID. */
+    private void handleInsertRandomUnique() {
+        String text = uniqueCountField.getText().trim();
+        int count;
+        try {
+            count = Integer.parseInt(text);
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this,
+                    "Unique count must be an integer.",
+                    "Input error",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
 
-        String date = String.format("%02d:%02d:%04d", day, month, year);
+        if (count <= 0) {
+            JOptionPane.showMessageDialog(this,
+                    "Unique count must be > 0.",
+                    "Input error",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
 
-        String meno = "M" + random.nextInt(100000);
-        String priezvisko = "P" + random.nextInt(100000);
-        String id = String.format("R%07d", random.nextInt(10_000_000));
+        int inserted = controller.insertRandomUniqueRecords(count);
+        if (inserted < count) {
+            JOptionPane.showMessageDialog(this,
+                    "Unikátne vložených " + inserted + " z požadovaných " + count + ".",
+                    "Info",
+                    JOptionPane.INFORMATION_MESSAGE);
+        }
 
-        return new PatientRecord(meno, priezvisko, date, id);
+        refreshDump();
+    }
+
+    // --- UNIQUE jedna insert ---
+
+    /** Handler pre vloženie jednej konkrétnej pacientky s kontrolou unikátneho ID. */
+    private void handleInsertOneUnique() {
+        String meno = menoField.getText().trim();
+        String priez = priezField.getText().trim();
+        String date = dateField.getText().trim();
+        String id = idField.getText().trim();
+
+        if (meno.isEmpty() || priez.isEmpty() || date.isEmpty() || id.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "Meno, priezvisko, dátum a ID nesmú byť prázdne.",
+                    "Input error",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        if (date.length() != 10 || date.charAt(2) != ':' || date.charAt(5) != ':') {
+            JOptionPane.showMessageDialog(this,
+                    "Dátum musí byť vo formáte DD:MM:RRRR.",
+                    "Input error",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        PatientRecord rec = new PatientRecord(meno, priez, date, id);
+        long addr = controller.insertRecordUnique(rec);
+        if (addr == -1L) {
+            JOptionPane.showMessageDialog(this,
+                    "Pacient s týmto ID už existuje: " + id,
+                    "Duplicitné ID",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+
+        refreshDump();
     }
 }
