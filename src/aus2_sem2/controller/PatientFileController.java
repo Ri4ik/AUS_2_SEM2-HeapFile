@@ -2,6 +2,7 @@ package aus2_sem2.controller;
 
 import aus2_sem2.model.PatientRecord;
 import aus2_sem2.storage.HeapFile;
+import aus2_sem2.storage.LinHashFile;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -15,37 +16,61 @@ import java.util.ArrayList;
 import java.util.Random;
 
 /**
- * Controller – sprostredkuje prácu medzi GUI a HeapFile.
- * GUI nikdy nepracuje s dátami priamo, ale cez tento kontrolér.
+ * Controller – sprostredkuje prácu medzi GUI a dátovými súbormi.
+ * - Pracuje s HeapFile<PatientRecord> (fyzické uloženie záznamov).
+ * - Nad rovnakým súborom buduje index LinHashFile<PatientRecord>.
+ *
+ * Všetky vkladania a mazania v „produkčnej“ časti aplikácie idú cez LinHashFile,
+ * aby bol index vždy konzistentný s obsahom HeapFile.
  */
 public class PatientFileController {
 
-    private final HeapFile<PatientRecord> heapFile; // model – súbor na disku
+    private final HeapFile<PatientRecord> heapFile;            // model – fyzický súbor
+    private final LinHashFile<PatientRecord> linHashFile;      // lineárne hešovanie nad tým istým súborom
     private final Random random;
 
     // auto-increment ID pacienta (unikátne v rámci systému)
     private static final String ID_META_FILE = "heapfile_patients_id.meta";
 
+    // meta súbor pre LinHash index
+    private static final String LINHASH_META_FILE = "patients_linhash.meta";
+
     /**
      * Počítadlo ďalšieho ID pacienta.
-     * Používame typ int ako "nezáporný" čítač (prakticky stačí rozsah).
+     * Používame typ int ako „nezáporný čítač“, pre účely zadania plne postačuje.
      */
     private int nextPatientId;
 
     public PatientFileController(HeapFile<PatientRecord> heapFile) {
         this.heapFile = heapFile;
         this.random = new Random();
-        this.nextPatientId = loadNextPatientId(); // načítame posledné ID alebo 1
+
+        // načítame počítadlo ID z meta súboru
+        this.nextPatientId = loadNextPatientId();
+
+        // vytvoríme index LinHashFile nad tým istým HeapFile
+        this.linHashFile = new LinHashFile<>(heapFile, LINHASH_META_FILE);
+
+        // ak je súbor pri štarte úplne prázdny, resetujeme čítač ID na 1
+        if (this.heapFile.getTotalValidRecords() == 0) {
+            this.nextPatientId = 1;
+            saveNextPatientId();
+        }
     }
 
     // --- info pre GUI ---
 
-    /** Vráti textový dump dátového súboru. */
+    /** Vráti textový dump dátového súboru (HeapFile). */
     public String getDump() {
         return heapFile.dumpDebugInfo();
     }
 
-    /** Vráti počet platných záznamov. */
+    /** Vráti textový dump lineárneho hešovacieho indexu (LinHashFile). */
+    public String getLinHashDump() {
+        return linHashFile.debugDump();
+    }
+
+    /** Vráti počet platných záznamov v HeapFile. */
     public int getTotalRecords() {
         return heapFile.getTotalValidRecords();
     }
@@ -54,7 +79,7 @@ public class PatientFileController {
 
     /**
      * Zmaže náhodné záznamy zo súboru.
-     * V GUI sa používa na rýchle otestovanie mazania.
+     * Mazanie prebieha CEZ LinHashFile.deleteById(), aby sa udržal aj index.
      */
     public int deleteRandomRecords(int count) {
         List<Long> addresses = heapFile.getAllAddresses();
@@ -66,34 +91,38 @@ public class PatientFileController {
         int removed = 0;
         for (int i = 0; i < count; i++) {
             long addr = addresses.get(i);
-            if (heapFile.delete(addr)) removed++;
+            PatientRecord rec = heapFile.get(addr);
+            if (rec == null) {
+                continue;
+            }
+            String id = rec.getId();
+            if (id == null) {
+                continue;
+            }
+            if (linHashFile.deleteById(id)) {
+                removed++;
+            }
         }
         return removed;
     }
 
     /**
-     * Zmaže prvý záznam so zadaným ID.
-     * Používa sa v GUI pri mazaní podľa ID pacienta.
+     * Zmaže prvý záznam so zadaným ID cez LinHash index.
      */
     public boolean deleteById(String id) {
-        List<Long> addresses = heapFile.getAllAddresses();
-        for (long addr : addresses) {
-            PatientRecord rec = heapFile.get(addr);
-            if (rec != null && id.equals(rec.getId())) {
-                return heapFile.delete(addr);
-            }
-        }
-        return false;
+        if (id == null || id.isEmpty()) return false;
+        return linHashFile.deleteById(id);
     }
 
     // --- funkčný test (10 insert, 4 delete) ---
 
     /**
      * Otestuje základnú funkcionalitu vkladania/mazania.
-     * Všetky vkladané záznamy používajú auto-increment ID (insertRecordUnique).
+     * - Vkladanie ide cez insertRecordUnique() (auto-ID + LinHashFile.insert()).
+     * - Mazanie prebieha cez LinHashFile.deleteById().
      */
     public void runFunctionalTest() {
-        List<Long> addrs = new ArrayList<>();
+        List<String> createdIds = new ArrayList<>();
 
         // vloží 10 testovacích záznamov s auto-ID
         for (int i = 0; i < 10; i++) {
@@ -102,19 +131,40 @@ public class PatientFileController {
             String date = String.format("%02d:%02d:%04d",
                     (i % 28) + 1, (i % 12) + 1, 2000 + i);
 
-            // ID sa ponechá prázdne – controller ho doplní auto-increment hodnotou
             PatientRecord recWithoutId = new PatientRecord(meno, priez, date, "");
-            long addr = insertRecordUnique(recWithoutId);
-            addrs.add(addr);
+            String newId = previewNextIdString(); // pozri sa, aké ID bude pridelené
+            insertRecordUnique(recWithoutId);     // reálne vloženie s auto-ID
+            createdIds.add(newId);
         }
 
-        // zmaže 4 z nich priamo cez adresu
+        // zmaže 4 z nich cez ich ID
         int[] toDeleteIdx = {1, 3, 5, 7};
         for (int idx : toDeleteIdx) {
-            if (idx < addrs.size()) {
-                heapFile.delete(addrs.get(idx));
+            if (idx < createdIds.size()) {
+                String id = createdIds.get(idx);
+                linHashFile.deleteById(id);
             }
         }
+    }
+
+    // --- LinHash-only pomocné metódy pre druhú záložku GUI ---
+
+    /**
+     * Vyhľadá záznam podľa ID cez LinHash index.
+     * Používa sa v záložke „LinHashFile“ v GUI.
+     */
+    public PatientRecord linFindById(String id) {
+        if (id == null || id.isEmpty()) return null;
+        return linHashFile.findById(id);
+    }
+
+    /**
+     * Zmaže záznam podľa ID cez LinHash index.
+     * Používa sa v záložke „LinHashFile“ v GUI.
+     */
+    public boolean linDeleteById(String id) {
+        if (id == null || id.isEmpty()) return false;
+        return linHashFile.deleteById(id);
     }
 
     // --- unikátne vkladanie s auto-increment ID ---
@@ -135,8 +185,8 @@ public class PatientFileController {
                 recWithoutId.getDate(),
                 newId
         );
-        long addr = heapFile.insert(withId);
-        saveNextPatientId(); // uložíme aktuálnu hodnotu počítadla
+        long addr = linHashFile.insert(withId); // insert ide cez index
+        saveNextPatientId();                    // uložíme aktuálnu hodnotu počítadla
         return addr;
     }
 
@@ -155,7 +205,7 @@ public class PatientFileController {
                     base.getDate(),
                     newId
             );
-            heapFile.insert(withId);
+            linHashFile.insert(withId);
             inserted++;
         }
         saveNextPatientId();
@@ -216,18 +266,40 @@ public class PatientFileController {
     }
 
     /**
+     * „Nehýbe“ počítadlom – len vráti ID, ktoré by bolo vygenerované pri najbližšom inserte.
+     * Používa sa v runFunctionalTest na zapamätanie si ID ešte pred vložením.
+     */
+    private String previewNextIdString() {
+        int tmp = nextPatientId;
+        if (tmp <= 0) {
+            tmp = 1;
+        }
+        return String.format("%010d", tmp);
+    }
+
+    /**
      * Vygeneruje nový ID reťazec v tvare "0000000001", "0000000002", ...
      * a inkrementuje počítadlo.
+     *
+     * Obsahuje logiku:
+     *  - ak je HeapFile v danom momente prázdny (0 záznamov), resetuje počítadlo na 1,
+     *    aby po kompletom vymazaní súboru išlo ID znova od 1.
      */
     private String generateNextIdString() {
+        // ak je dátový súbor prázdny, začíname s ID = 1
+        if (heapFile.getTotalValidRecords() == 0) {
+            nextPatientId = 1;
+        }
+
         if (nextPatientId <= 0) {
             // ochrana pre prípad poškodenia meta súboru alebo overflow
             nextPatientId = 1;
         }
+
         String result = String.format("%010d", nextPatientId);
         nextPatientId++;
 
-        // jednoduchá ochrana pred pretečením – po MAX_VALUE začneme od 1,
+        // jednoduchá ochrana pred pretečením – po MIN_VALUE reset na 1,
         // v reálnej úlohe sa na tento limit prakticky nedostaneme
         if (nextPatientId == Integer.MIN_VALUE) {
             nextPatientId = 1;
@@ -239,6 +311,11 @@ public class PatientFileController {
     /** Volateľné pri korektnom ukončení aplikácie. */
     public void close() {
         saveNextPatientId();
-        heapFile.close();
+        if (linHashFile != null) {
+            // LinHashFile pri close() zavrie aj HeapFile
+            linHashFile.close();
+        } else {
+            heapFile.close();
+        }
     }
 }
