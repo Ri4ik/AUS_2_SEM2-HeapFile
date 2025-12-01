@@ -16,6 +16,9 @@ import javax.swing.*;
 /**
  * GUI pre zobrazenie a testovanie heap súboru pacientov.
  * View komunikuje iba cez PatientFileController.
+ *
+ * Vkladanie záznamov prebieha výhradne s auto-increment ID
+ * (unikátne ID generuje controller).
  */
 public class FileDumpViewer extends JFrame {
 
@@ -23,9 +26,6 @@ public class FileDumpViewer extends JFrame {
     private final JTextArea textArea;                 // výpis dumpu súboru
 
     private final JButton refreshButton;
-
-    private final JTextField insertCountField;
-    private final JButton insertButton;
 
     private final JLabel deleteLimitLabel;
     private final JTextField deleteCountField;
@@ -35,7 +35,6 @@ public class FileDumpViewer extends JFrame {
     private final JTextField priezField;
     private final JTextField dateField;
     private final JTextField idField;
-    private final JButton insertOneButton;
     private final JButton deleteByIdButton;
 
     private final JButton testButton;
@@ -52,9 +51,6 @@ public class FileDumpViewer extends JFrame {
 
         this.refreshButton = new JButton("Refresh dump");
 
-        this.insertCountField = new JTextField("10", 6);
-        this.insertButton = new JButton("Insert random");
-
         this.deleteLimitLabel = new JLabel("Delete count (max 0):");
         this.deleteCountField = new JTextField("5", 6);
         this.deleteButton = new JButton("Delete random");
@@ -63,7 +59,6 @@ public class FileDumpViewer extends JFrame {
         this.priezField = new JTextField(10);
         this.dateField = new JTextField("01:01:2000", 10);
         this.idField = new JTextField(10);
-        this.insertOneButton = new JButton("Insert one");
         this.deleteByIdButton = new JButton("Delete by ID");
 
         this.testButton = new JButton("Test funkcionality");
@@ -72,9 +67,9 @@ public class FileDumpViewer extends JFrame {
         this.insertRandomUniqueButton = new JButton("Insert random UNIQUE");
         this.insertOneUniqueButton = new JButton("Insert one UNIQUE");
 
-        initUi();           // inicializácia vzhľadu GUI
+        initUi();            // inicializácia vzhľadu GUI
         registerListeners(); // pripojenie handlerov na tlačidlá
-        refreshDump();      // prvotné načítanie dumpu
+        refreshDump();       // prvotné načítanie dumpu
     }
 
     /** Nastavenie layoutu, panelov a komponentov. */
@@ -95,16 +90,16 @@ public class FileDumpViewer extends JFrame {
         gbc.insets = new Insets(4, 4, 4, 4);
         gbc.anchor = GridBagConstraints.WEST;
 
-        // 1. riadok: obyčajné random insert/delete + refresh + test
+        // 1. riadok: UNIQUE random insert + delete random + refresh + test
         gbc.gridy = 0;
         gbc.gridx = 0;
-        controlPanel.add(new JLabel("Insert count:"), gbc);
+        controlPanel.add(new JLabel("Unique random count:"), gbc);
 
         gbc.gridx++;
-        controlPanel.add(insertCountField, gbc);
+        controlPanel.add(uniqueCountField, gbc);
 
         gbc.gridx++;
-        controlPanel.add(insertButton, gbc);
+        controlPanel.add(insertRandomUniqueButton, gbc);
 
         gbc.gridx++;
         controlPanel.add(Box.createHorizontalStrut(10), gbc);
@@ -130,7 +125,7 @@ public class FileDumpViewer extends JFrame {
         gbc.gridx++;
         controlPanel.add(testButton, gbc);
 
-        // 2. riadok: konkrétna jedna obyčajná insert + delete by ID
+        // 2. riadok: vloženie jednej pacientky s auto-ID + mazanie podľa ID
         gbc.gridy = 1;
         gbc.gridx = 0;
         controlPanel.add(new JLabel("Meno:"), gbc);
@@ -151,33 +146,16 @@ public class FileDumpViewer extends JFrame {
         controlPanel.add(dateField, gbc);
 
         gbc.gridx++;
-        controlPanel.add(new JLabel("ID:"), gbc);
+        controlPanel.add(insertOneUniqueButton, gbc);
+
+        gbc.gridx++;
+        controlPanel.add(new JLabel("ID pre mazanie:"), gbc);
 
         gbc.gridx++;
         controlPanel.add(idField, gbc);
 
         gbc.gridx++;
-        controlPanel.add(insertOneButton, gbc);
-
-        gbc.gridx++;
         controlPanel.add(deleteByIdButton, gbc);
-
-        // 3. riadok: UNIKÁTNE vkladanie
-        gbc.gridy = 2;
-        gbc.gridx = 0;
-        controlPanel.add(new JLabel("Unique random count:"), gbc);
-
-        gbc.gridx++;
-        controlPanel.add(uniqueCountField, gbc);
-
-        gbc.gridx++;
-        controlPanel.add(insertRandomUniqueButton, gbc);
-
-        gbc.gridx++;
-        controlPanel.add(Box.createHorizontalStrut(10), gbc);
-
-        gbc.gridx++;
-        controlPanel.add(insertOneUniqueButton, gbc);
 
         add(controlPanel, BorderLayout.SOUTH);
 
@@ -188,9 +166,7 @@ public class FileDumpViewer extends JFrame {
     /** Registrácia action listenerov pre tlačidlá a okno. */
     private void registerListeners() {
         refreshButton.addActionListener(e -> refreshDump());
-        insertButton.addActionListener(e -> handleInsertRandom());
         deleteButton.addActionListener(e -> handleDeleteRandom());
-        insertOneButton.addActionListener(e -> handleInsertOne());
         deleteByIdButton.addActionListener(e -> handleDeleteById());
         testButton.addActionListener(e -> handleTestFunctional());
         insertRandomUniqueButton.addActionListener(e -> handleInsertRandomUnique());
@@ -199,7 +175,7 @@ public class FileDumpViewer extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                // HeapFile sa zatvára v main-e, tu netreba nič riešiť
+                // HeapFile sa zatvára v main-e/controlleri, tu netreba nič riešiť
             }
         });
     }
@@ -218,17 +194,17 @@ public class FileDumpViewer extends JFrame {
         deleteLimitLabel.setText("Delete count (max " + total + "):");
     }
 
-    // --- obyčajný random insert ---
+    // --- UNIQUE random insert ---
 
-    /** Handler pre vloženie náhodných záznamov (bez unikátnej kontroly). */
-    private void handleInsertRandom() {
-        String text = insertCountField.getText().trim();
+    /** Handler pre náhodné vkladanie záznamov s unikátnym auto-ID. */
+    private void handleInsertRandomUnique() {
+        String text = uniqueCountField.getText().trim();
         int count;
         try {
             count = Integer.parseInt(text);
         } catch (NumberFormatException ex) {
             JOptionPane.showMessageDialog(this,
-                    "Insert count must be an integer.",
+                    "Unique count must be an integer.",
                     "Input error",
                     JOptionPane.ERROR_MESSAGE);
             return;
@@ -236,17 +212,58 @@ public class FileDumpViewer extends JFrame {
 
         if (count <= 0) {
             JOptionPane.showMessageDialog(this,
-                    "Insert count must be > 0.",
+                    "Unique count must be > 0.",
                     "Input error",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
 
-        controller.insertRandomRecords(count);
+        int inserted = controller.insertRandomUniqueRecords(count);
+        if (inserted < count) {
+            JOptionPane.showMessageDialog(this,
+                    "Unikátne vložených " + inserted + " z požadovaných " + count + ".",
+                    "Info",
+                    JOptionPane.INFORMATION_MESSAGE);
+        }
+
         refreshDump();
     }
 
-    // --- obyčajné random delete ---
+    // --- UNIQUE jedna insert ---
+
+    /**
+     * Handler pre vloženie jednej konkrétnej pacientky/pacienta
+     * s automaticky generovaným unikátnym ID.
+     */
+    private void handleInsertOneUnique() {
+        String meno = menoField.getText().trim();
+        String priez = priezField.getText().trim();
+        String date = dateField.getText().trim();
+
+        if (meno.isEmpty() || priez.isEmpty() || date.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "Meno, priezvisko a dátum nesmú byť prázdne (ID sa generuje automaticky).",
+                    "Input error",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        if (date.length() != 10 || date.charAt(2) != ':' || date.charAt(5) != ':') {
+            JOptionPane.showMessageDialog(this,
+                    "Dátum musí byť vo formáte DD:MM:RRRR.",
+                    "Input error",
+                    JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        // ID dáme prázdne, controller ho nahradí auto-increment hodnotou
+        PatientRecord rec = new PatientRecord(meno, priez, date, "");
+        controller.insertRecordUnique(rec);
+
+        refreshDump();
+    }
+
+    // --- náhodné mazanie ---
 
     /** Handler pre náhodné mazanie záznamov. */
     private void handleDeleteRandom() {
@@ -278,36 +295,6 @@ public class FileDumpViewer extends JFrame {
                     JOptionPane.INFORMATION_MESSAGE);
         }
 
-        refreshDump();
-    }
-
-    // --- obyčajná jedna insert ---
-
-    /** Handler pre vloženie jednej konkrétnej (neunikátnej) pacientskej karty. */
-    private void handleInsertOne() {
-        String meno = menoField.getText().trim();
-        String priez = priezField.getText().trim();
-        String date = dateField.getText().trim();
-        String id = idField.getText().trim();
-
-        if (meno.isEmpty() || priez.isEmpty() || date.isEmpty() || id.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
-                    "Meno, priezvisko, dátum a ID nesmú byť prázdne.",
-                    "Input error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        if (date.length() != 10 || date.charAt(2) != ':' || date.charAt(5) != ':') {
-            JOptionPane.showMessageDialog(this,
-                    "Dátum musí byť vo formáte DD:MM:RRRR.",
-                    "Input error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        PatientRecord rec = new PatientRecord(meno, priez, date, id);
-        controller.insertRecord(rec);
         refreshDump();
     }
 
@@ -343,83 +330,8 @@ public class FileDumpViewer extends JFrame {
         controller.runFunctionalTest();
         refreshDump();
         JOptionPane.showMessageDialog(this,
-                "Test funkcionality: vložených 10 záznamov (obyčajne), zmazané 4 z nich.",
+                "Test funkcionality: vložených 10 záznamov (auto-ID), zmazané 4 z nich.",
                 "Test",
                 JOptionPane.INFORMATION_MESSAGE);
-    }
-
-    // --- UNIQUE random insert ---
-
-    /** Handler pre náhodné vkladanie záznamov s kontrolou unikátneho ID. */
-    private void handleInsertRandomUnique() {
-        String text = uniqueCountField.getText().trim();
-        int count;
-        try {
-            count = Integer.parseInt(text);
-        } catch (NumberFormatException ex) {
-            JOptionPane.showMessageDialog(this,
-                    "Unique count must be an integer.",
-                    "Input error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        if (count <= 0) {
-            JOptionPane.showMessageDialog(this,
-                    "Unique count must be > 0.",
-                    "Input error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        int inserted = controller.insertRandomUniqueRecords(count);
-        if (inserted < count) {
-            JOptionPane.showMessageDialog(this,
-                    "Unikátne vložených " + inserted + " z požadovaných " + count + ".",
-                    "Info",
-                    JOptionPane.INFORMATION_MESSAGE);
-        }
-
-        refreshDump();
-    }
-
-     // --- UNIQUE jedna insert ---
-
-    /** Handler pre vloženie jednej konkrétnej pacientky s auto-increment unikátnym ID. */
-    private void handleInsertOneUnique() {
-        String meno = menoField.getText().trim();
-        String priez = priezField.getText().trim();
-        String date = dateField.getText().trim();
-        // ID pole sa pri UNIQUE režime ignoruje – generuje sa automaticky
-        // String id = idField.getText().trim();
-
-        if (meno.isEmpty() || priez.isEmpty() || date.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
-                    "Meno, priezvisko a dátum nesmú byť prázdne (ID sa generuje automaticky).",
-                    "Input error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        if (date.length() != 10 || date.charAt(2) != ':' || date.charAt(5) != ':') {
-            JOptionPane.showMessageDialog(this,
-                    "Dátum musí byť vo formáte DD:MM:RRRR.",
-                    "Input error",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
-        // ID dáme prázdne, controller ho nahradí auto-increment hodnotou
-        PatientRecord rec = new PatientRecord(meno, priez, date, "");
-        long addr = controller.insertRecordUnique(rec);
-        if (addr == -1L) {
-            // v tejto verzii sa to prakticky nestane, ID je vždy unikátne z počítadla
-            JOptionPane.showMessageDialog(this,
-                    "Pacient s týmto ID už existuje.",
-                    "Duplicitné ID",
-                    JOptionPane.ERROR_MESSAGE);
-        }
-
-        refreshDump();
     }
 }

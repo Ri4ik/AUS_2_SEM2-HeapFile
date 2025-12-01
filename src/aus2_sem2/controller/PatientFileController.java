@@ -25,7 +25,12 @@ public class PatientFileController {
 
     // auto-increment ID pacienta (unikátne v rámci systému)
     private static final String ID_META_FILE = "heapfile_patients_id.meta";
-    private long nextPatientId;
+
+    /**
+     * Počítadlo ďalšieho ID pacienta.
+     * Používame typ int ako "nezáporný" čítač (prakticky stačí rozsah).
+     */
+    private int nextPatientId;
 
     public PatientFileController(HeapFile<PatientRecord> heapFile) {
         this.heapFile = heapFile;
@@ -45,24 +50,12 @@ public class PatientFileController {
         return heapFile.getTotalValidRecords();
     }
 
-    // --- obyčajné vkladanie (bez kontroly ID) ---
-
-    /** Vloží náhodné záznamy bez unikátnej kontroly (ID je náhodné). */
-    public void insertRandomRecords(int count) {
-        for (int i = 0; i < count; i++) {
-            PatientRecord rec = generateRandomRecord();
-            heapFile.insert(rec);
-        }
-    }
-
-    /** Vloží jeden záznam bez kontroly ID (ID zadáva používateľ). */
-    public long insertRecord(PatientRecord rec) {
-        return heapFile.insert(rec);
-    }
-
     // --- mazanie (náhodné alebo podľa ID) ---
 
-    /** Zmaže náhodné záznamy zo súboru. */
+    /**
+     * Zmaže náhodné záznamy zo súboru.
+     * V GUI sa používa na rýchle otestovanie mazania.
+     */
     public int deleteRandomRecords(int count) {
         List<Long> addresses = heapFile.getAllAddresses();
         if (addresses.isEmpty() || count <= 0) return 0;
@@ -78,7 +71,10 @@ public class PatientFileController {
         return removed;
     }
 
-    /** Zmaže prvý záznam so zadaným ID. */
+    /**
+     * Zmaže prvý záznam so zadaným ID.
+     * Používa sa v GUI pri mazaní podľa ID pacienta.
+     */
     public boolean deleteById(String id) {
         List<Long> addresses = heapFile.getAllAddresses();
         for (long addr : addresses) {
@@ -92,23 +88,27 @@ public class PatientFileController {
 
     // --- funkčný test (10 insert, 4 delete) ---
 
-    /** Otestuje základnú funkcionalitu vkladania/mazania. */
+    /**
+     * Otestuje základnú funkcionalitu vkladania/mazania.
+     * Všetky vkladané záznamy používajú auto-increment ID (insertRecordUnique).
+     */
     public void runFunctionalTest() {
         List<Long> addrs = new ArrayList<>();
 
-        // vloží 10 testovacích záznamov (obyčajné, bez auto-ID)
+        // vloží 10 testovacích záznamov s auto-ID
         for (int i = 0; i < 10; i++) {
             String meno = "TestM" + i;
             String priez = "TestP" + i;
-            String date = String.format("%02d:%02d:%04d", (i % 28) + 1, (i % 12) + 1, 2000 + i);
-            String id = String.format("TST%07d", i);
+            String date = String.format("%02d:%02d:%04d",
+                    (i % 28) + 1, (i % 12) + 1, 2000 + i);
 
-            PatientRecord rec = new PatientRecord(meno, priez, date, id);
-            long addr = heapFile.insert(rec);
+            // ID sa ponechá prázdne – controller ho doplní auto-increment hodnotou
+            PatientRecord recWithoutId = new PatientRecord(meno, priez, date, "");
+            long addr = insertRecordUnique(recWithoutId);
             addrs.add(addr);
         }
 
-        // zmaže 4 z nich
+        // zmaže 4 z nich priamo cez adresu
         int[] toDeleteIdx = {1, 3, 5, 7};
         for (int idx : toDeleteIdx) {
             if (idx < addrs.size()) {
@@ -122,6 +122,10 @@ public class PatientFileController {
     /**
      * Vloží pacienta tak, že ID sa VŽDY generuje automaticky (auto-increment),
      * používateľom zadané ID sa ignoruje.
+     *
+     * @param recWithoutId záznam s vyplneným menom, priezviskom a dátumom,
+     *                     pole ID sa ignoruje (môže byť prázdne)
+     * @return adresa vloženého záznamu v HeapFile
      */
     public long insertRecordUnique(PatientRecord recWithoutId) {
         String newId = generateNextIdString();
@@ -143,7 +147,7 @@ public class PatientFileController {
     public int insertRandomUniqueRecords(int count) {
         int inserted = 0;
         for (int i = 0; i < count; i++) {
-            PatientRecord base = generateRandomRecord();
+            PatientRecord base = generateRandomRecordWithoutId();
             String newId = generateNextIdString();
             PatientRecord withId = new PatientRecord(
                     base.getMeno(),
@@ -160,8 +164,11 @@ public class PatientFileController {
 
     // --- pomocné generovanie dát ---
 
-    /** Vytvorí náhodný záznam – používa sa pri testovaní (ID je náhodné, nie auto). */
-    private PatientRecord generateRandomRecord() {
+    /**
+     * Vytvorí náhodný záznam pacienta BEZ ID.
+     * ID sa doplní až pri vkladaní (auto-increment).
+     */
+    private PatientRecord generateRandomRecordWithoutId() {
         int year = 1950 + random.nextInt(60);
         int month = 1 + random.nextInt(12);
         int day = 1 + random.nextInt(28);
@@ -169,44 +176,67 @@ public class PatientFileController {
         String date = String.format("%02d:%02d:%04d", day, month, year);
         String meno = "M" + random.nextInt(100000);
         String priezvisko = "P" + random.nextInt(100000);
-        String id = String.format("R%07d", random.nextInt(10_000_000));
 
-        return new PatientRecord(meno, priezvisko, date, id);
+        // ID nechávame prázdne – doplní sa auto-incrementom
+        return new PatientRecord(meno, priezvisko, date, "");
     }
 
     // --- auto-increment ID pomocné metódy ---
 
-    /** Načíta nextPatientId z meta súboru alebo vráti 1, ak meta súbor neexistuje. */
-    private long loadNextPatientId() {
+    /**
+     * Načíta nextPatientId z meta súboru alebo vráti 1, ak meta súbor neexistuje
+     * alebo obsahuje neplatnú hodnotu.
+     */
+    private int loadNextPatientId() {
         File f = new File(ID_META_FILE);
         if (!f.exists()) {
-            return 1L;
+            return 1;
         }
         try (DataInputStream dis = new DataInputStream(new FileInputStream(f))) {
-            return dis.readLong();
+            int value = dis.readInt();
+            if (value <= 0) {
+                return 1;
+            }
+            return value;
         } catch (IOException e) {
             // v prípade problému začneme od 1
-            return 1L;
+            return 1;
         }
     }
 
-    /** Uloží aktuálnu hodnotu nextPatientId do meta súboru. */
+    /**
+     * Uloží aktuálnu hodnotu nextPatientId do meta súboru.
+     */
     private void saveNextPatientId() {
         try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(ID_META_FILE))) {
-            dos.writeLong(nextPatientId);
+            dos.writeInt(nextPatientId);
         } catch (IOException e) {
-            // pri zlyhaní meta súboru nechceme zabiť aplikáciu, len to ignorujeme
+            // pri zlyhaní meta súboru nechceme zabiť aplikáciu, chybu ignorujeme
         }
     }
 
-    /** Vygeneruje nový ID reťazec v tvare "0000000001", "0000000002", ... a inkrementuje počítadlo. */
+    /**
+     * Vygeneruje nový ID reťazec v tvare "0000000001", "0000000002", ...
+     * a inkrementuje počítadlo.
+     */
     private String generateNextIdString() {
+        if (nextPatientId <= 0) {
+            // ochrana pre prípad poškodenia meta súboru alebo overflow
+            nextPatientId = 1;
+        }
         String result = String.format("%010d", nextPatientId);
         nextPatientId++;
+
+        // jednoduchá ochrana pred pretečením – po MAX_VALUE začneme od 1,
+        // v reálnej úlohe sa na tento limit prakticky nedostaneme
+        if (nextPatientId == Integer.MIN_VALUE) {
+            nextPatientId = 1;
+        }
+
         return result;
     }
 
-    /** Voliteľné – môžeš volať napr. pri ukončení aplikácie. */
+    /** Volateľné pri korektnom ukončení aplikácie. */
     public void close() {
         saveNextPatientId();
         heapFile.close();

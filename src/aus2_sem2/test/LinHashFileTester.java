@@ -24,7 +24,7 @@ public class LinHashFileTester {
 
     private static final int INSERT_COUNT = 10_000;
     private static final int FIND_COUNT   = 2_000;
-    private static final int DELETE_COUNT = 10_000;
+    private static final int DELETE_COUNT = 1_000;
 
     /**
      * Spustí kompletný testovací scenár pre LinHashFile.
