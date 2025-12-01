@@ -383,18 +383,19 @@ public class FileDumpViewer extends JFrame {
         refreshDump();
     }
 
-    // --- UNIQUE jedna insert ---
+     // --- UNIQUE jedna insert ---
 
-    /** Handler pre vloženie jednej konkrétnej pacientky s kontrolou unikátneho ID. */
+    /** Handler pre vloženie jednej konkrétnej pacientky s auto-increment unikátnym ID. */
     private void handleInsertOneUnique() {
         String meno = menoField.getText().trim();
         String priez = priezField.getText().trim();
         String date = dateField.getText().trim();
-        String id = idField.getText().trim();
+        // ID pole sa pri UNIQUE režime ignoruje – generuje sa automaticky
+        // String id = idField.getText().trim();
 
-        if (meno.isEmpty() || priez.isEmpty() || date.isEmpty() || id.isEmpty()) {
+        if (meno.isEmpty() || priez.isEmpty() || date.isEmpty()) {
             JOptionPane.showMessageDialog(this,
-                    "Meno, priezvisko, dátum a ID nesmú byť prázdne.",
+                    "Meno, priezvisko a dátum nesmú byť prázdne (ID sa generuje automaticky).",
                     "Input error",
                     JOptionPane.ERROR_MESSAGE);
             return;
@@ -408,11 +409,13 @@ public class FileDumpViewer extends JFrame {
             return;
         }
 
-        PatientRecord rec = new PatientRecord(meno, priez, date, id);
+        // ID dáme prázdne, controller ho nahradí auto-increment hodnotou
+        PatientRecord rec = new PatientRecord(meno, priez, date, "");
         long addr = controller.insertRecordUnique(rec);
         if (addr == -1L) {
+            // v tejto verzii sa to prakticky nestane, ID je vždy unikátne z počítadla
             JOptionPane.showMessageDialog(this,
-                    "Pacient s týmto ID už existuje: " + id,
+                    "Pacient s týmto ID už existuje.",
                     "Duplicitné ID",
                     JOptionPane.ERROR_MESSAGE);
         }

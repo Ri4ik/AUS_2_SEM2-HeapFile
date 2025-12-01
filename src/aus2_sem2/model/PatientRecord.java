@@ -4,7 +4,9 @@ import aus2_sem2.util.ByteUtils;
 
 /**
  * Model jedného záznamu pacienta uloženého v heap súbore.
- * Každý atribút má pevnú dĺžku kvôli jednoduchému ukladaniu do blokov.
+ * Každý textový atribút sa ukladá ako:
+ *   1 bajt – počet platných znakov,
+ *   N bajtov – dáta v pevnej dĺžke (padding nulami).
  */
 public class PatientRecord implements Record {
 
@@ -13,16 +15,22 @@ public class PatientRecord implements Record {
     private String date;        // "DD:MM:RRRR" – 10 znakov
     private String id;          // unikátne ID pacienta – 10 znakov
 
-    public static final int MENO_LEN = 15;
+    public static final int MENO_LEN  = 15;
     public static final int PRIEZ_LEN = 14;
-    public static final int DATE_LEN = 10;
-    public static final int ID_LEN = 10;
+    public static final int DATE_LEN  = 10;
+    public static final int ID_LEN    = 10;
+
+    // každý string: 1 bajt dĺžka + fixné pole bajtov
+    private static final int MENO_FIELD_SIZE  = 1 + MENO_LEN;
+    private static final int PRIEZ_FIELD_SIZE = 1 + PRIEZ_LEN;
+    private static final int DATE_FIELD_SIZE  = 1 + DATE_LEN;
+    private static final int ID_FIELD_SIZE    = 1 + ID_LEN;
 
     public PatientRecord() {
         this.meno = "";
         this.priezvisko = "";
         this.date = "";
-       	this.id = "";
+        this.id = "";
     }
 
     public PatientRecord(String meno, String priezvisko, String date, String id) {
@@ -32,50 +40,84 @@ public class PatientRecord implements Record {
         this.id = id;
     }
 
-    /** Veľkosť záznamu v bajtoch (súčet pevných dĺžok). */
+    /** Fixná veľkosť záznamu v bajtoch. */
     @Override
     public int getSize() {
-        return MENO_LEN + PRIEZ_LEN + DATE_LEN + ID_LEN;
+        // (1 + MENO_LEN) + (1 + PRIEZ_LEN) + (1 + DATE_LEN) + (1 + ID_LEN)
+        return MENO_FIELD_SIZE + PRIEZ_FIELD_SIZE + DATE_FIELD_SIZE + ID_FIELD_SIZE;
     }
 
-    /** Serializácia záznamu do pevného bajtového poľa. */
+    /** Serializácia záznamu – ku každému stringu sa uloží aj dĺžka. */
     @Override
     public byte[] toByteArray() {
         try {
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
-            dos.write(ByteUtils.toFixedBytes(meno, MENO_LEN));
-            dos.write(ByteUtils.toFixedBytes(priezvisko, PRIEZ_LEN));
-            dos.write(ByteUtils.toFixedBytes(date, DATE_LEN));
-            dos.write(ByteUtils.toFixedBytes(id, ID_LEN));
+            // meno
+            byte[] menoBytes = ByteUtils.toFixedBytes(meno, MENO_LEN);
+            int menoLen = Math.min(meno.length(), MENO_LEN);
+            dos.writeByte(menoLen);
+            dos.write(menoBytes);
+
+            // priezvisko
+            byte[] priezBytes = ByteUtils.toFixedBytes(priezvisko, PRIEZ_LEN);
+            int priezLen = Math.min(priezvisko.length(), PRIEZ_LEN);
+            dos.writeByte(priezLen);
+            dos.write(priezBytes);
+
+            // date
+            byte[] dateBytes = ByteUtils.toFixedBytes(date, DATE_LEN);
+            int dateLen = Math.min(date.length(), DATE_LEN);
+            dos.writeByte(dateLen);
+            dos.write(dateBytes);
+
+            // id
+            byte[] idBytes = ByteUtils.toFixedBytes(id, ID_LEN);
+            int idLen = Math.min(id.length(), ID_LEN);
+            dos.writeByte(idLen);
+            dos.write(idBytes);
 
             return baos.toByteArray();
 
         } catch (java.io.IOException e) {
-            throw new IllegalStateException("Error during toByteArray()");
+            throw new IllegalStateException("Error during PatientRecord.toByteArray()", e);
         }
     }
 
-    /** Načítanie záznamu z pevného bajtového poľa. */
+    /** Načítanie záznamu – číta dĺžku + fixné bajty pre každý reťazec. */
     @Override
     public void fromByteArray(byte[] data) {
         try {
-            int pos = 0;
+            java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(data);
+            java.io.DataInputStream dis = new java.io.DataInputStream(bais);
 
-            this.meno = ByteUtils.fromFixedBytes(data, pos, MENO_LEN);
-            pos += MENO_LEN;
+            // meno
+            int menoLen = dis.readUnsignedByte(); // môžeme ignorovať, ale je uložený
+            byte[] menoBytes = new byte[MENO_LEN];
+            dis.readFully(menoBytes);
+            this.meno = ByteUtils.fromFixedBytes(menoBytes, 0, MENO_LEN);
 
-            this.priezvisko = ByteUtils.fromFixedBytes(data, pos, PRIEZ_LEN);
-            pos += PRIEZ_LEN;
+            // priezvisko
+            int priezLen = dis.readUnsignedByte();
+            byte[] priezBytes = new byte[PRIEZ_LEN];
+            dis.readFully(priezBytes);
+            this.priezvisko = ByteUtils.fromFixedBytes(priezBytes, 0, PRIEZ_LEN);
 
-            this.date = ByteUtils.fromFixedBytes(data, pos, DATE_LEN);
-            pos += DATE_LEN;
+            // date
+            int dateLen = dis.readUnsignedByte();
+            byte[] dateBytes = new byte[DATE_LEN];
+            dis.readFully(dateBytes);
+            this.date = ByteUtils.fromFixedBytes(dateBytes, 0, DATE_LEN);
 
-            this.id = ByteUtils.fromFixedBytes(data, pos, ID_LEN);
+            // id
+            int idLen = dis.readUnsignedByte();
+            byte[] idBytes = new byte[ID_LEN];
+            dis.readFully(idBytes);
+            this.id = ByteUtils.fromFixedBytes(idBytes, 0, ID_LEN);
 
         } catch (Exception e) {
-            throw new IllegalStateException("Error during fromByteArray()");
+            throw new IllegalStateException("Error during PatientRecord.fromByteArray()", e);
         }
     }
 
@@ -111,7 +153,7 @@ public class PatientRecord implements Record {
         return date;
     }
 
-    /** Používa sa pri kontrole unikátneho ID. */
+    /** Používa sa pri kontrole/ukladaní ID. */
     @Override
     public String getId() {
         return id;
