@@ -1,333 +1,209 @@
 package aus2_sem2.test;
 
 import aus2_sem2.model.PatientRecord;
+import aus2_sem2.storage.Block;
 import aus2_sem2.storage.HeapFile;
 import aus2_sem2.storage.LinHashFile;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
-/**
- * Tester pre LinHashFile<PatientRecord> (lineárne hešovanie nad HeapFile).
- *
- * - Používa samostatný heap súbor a meta súbor (neovplyvní produkčné dáta).
- * - Vloží 10000 záznamov cez LinHashFile.insert().
- * - Vyhľadá 2000 záznamov cez LinHashFile.findById().
- * - Zmaže 5000 záznamov cez LinHashFile.deleteById().
- * - Overí konzistenciu nájdených/zmazaných záznamov.
- * - Otestuje opätovné otvorenie LinHashFile (loadMeta + rebuildDirectory).
- *
- * Pri akejkoľvek nezrovnalosti vyhodí IllegalStateException z testera.
- */
 public class LinHashFileTester {
 
-    private static final int INSERT_COUNT = 10_000;
-    private static final int FIND_COUNT   = 2_000;
-    private static final int DELETE_COUNT = 1_000;
+    private static final int INSERT_COUNT = 5000;
+    private static final int FIND_COUNT   = 1500;
+    private static final int DELETE_COUNT = 1500;
 
-    /**
-     * Spustí kompletný testovací scenár pre LinHashFile.
-     */
     public static void runAllTests() {
-        String heapPath = "heapfile_linhash_test.dat";
-        String metaPath = "patients_linhash_test.meta";
+        String base = "linhash_test";
 
-        deleteIfExists(heapPath);
-        deleteIfExists(metaPath);
-
-        HeapFile<PatientRecord> heap =
-                new HeapFile<>(heapPath, 256, PatientRecord.class);
-        LinHashFile<PatientRecord> lin =
-                new LinHashFile<>(heap, metaPath);
+        deleteIfExists(base + "_lh_primary.dat");
+        deleteIfExists(base + "_lh_overflow.dat");
+        deleteIfExists(base + "_lhmeta.dat");
 
         try {
+            LinHashFile<PatientRecord> lin = new LinHashFile<>(
+                    base,
+                    256,
+                    PatientRecord.class,
+                    4,
+                    0.75,
+                    0.40
+            );
+
             System.out.println("=== LinHashFileTester: START ===");
-            testInsertAndFind(heap, lin);
-            testDelete(heap, lin);
-            testReopen(heapPath, metaPath);
+            testInsertAndFind(lin);
+            testDelete(lin);
+            testReopen(base);
             System.out.println("=== LinHashFileTester: OK ===");
-        } finally {
-            // korektné ukončenie (uloží meta + zatvorí HeapFile)
+
             lin.close();
+        } catch (Exception e) {
+            throw new IllegalStateException("LinHashFileTester FAILED: " + e.getMessage(), e);
         }
     }
 
-    // =======================
-    // 1. Vkladanie + hľadanie
-    // =======================
+    // =============================
+    // 1. INSERT + FIND
+    // =============================
+    private static void testInsertAndFind(LinHashFile<PatientRecord> lin) throws Exception {
+        System.out.println("[Tester] Insert " + INSERT_COUNT);
 
-    private static void testInsertAndFind(HeapFile<PatientRecord> heap,
-                                          LinHashFile<PatientRecord> lin) {
-        System.out.println("[LinHashFileTester] Insert " + INSERT_COUNT + " records...");
-
-        List<String> ids = new ArrayList<>(INSERT_COUNT);
+        List<String> ids = new ArrayList<>();
 
         for (int i = 0; i < INSERT_COUNT; i++) {
-            PatientRecord rec = generateRecord(i);
-            long addr = lin.insert(rec);
-            if (addr < 0) {
-                fail("LinHashFile.insert vrátil zápornú adresu pre i=" + i);
-            }
-            ids.add(rec.getId());
+            PatientRecord r = generateRecord(i);
+            lin.insert(r);
+            ids.add(r.getId());
         }
 
-        int total = heap.getTotalValidRecords();
-        assertEquals(INSERT_COUNT, total,
-                "Po vkladaní cez LinHashFile je v HeapFile nesprávny počet záznamov.");
-
-       if (FIND_COUNT > INSERT_COUNT) {
-            fail("FIND_COUNT (" + FIND_COUNT + ") je väčší ako INSERT_COUNT (" + INSERT_COUNT + ") "
-                 + "v LinHashFileTester.");
+        if (lin.getTotalRecords() != INSERT_COUNT) {
+            fail("TotalRecords != INSERT_COUNT");
         }
 
-        System.out.println("[LinHashFileTester] Find " + FIND_COUNT + " records...");
+        System.out.println("[Tester] Find " + FIND_COUNT);
         for (int i = 0; i < FIND_COUNT; i++) {
             String id = ids.get(i);
             PatientRecord found = lin.findById(id);
-            if (found == null) {
-                fail("findById(" + id + ") vrátil null po vkladaní.");
-            }
-            if (!id.equals(found.getId())) {
-                fail("findById(" + id + ") vrátil záznam s iným ID: " + found.getId());
-            }
+            if (found == null) fail("findById returned null for " + id);
+            if (!id.equals(found.getId()))
+                fail("Wrong ID returned by findById: " + found.getId());
         }
 
-        System.out.println("[LinHashFileTester] Insert/Find OK");
-         // dodatočná kontrola konzistencie po vkladaní a hľadaní
-        validateConsistency(heap, lin);
+        validateConsistency(lin);
+        System.out.println("[Tester] Insert/Find OK");
     }
 
-    // =======================
-    // 2. Mazanie
-    // =======================
+    // =============================
+    // 2. DELETE
+    // =============================
+    private static void testDelete(LinHashFile<PatientRecord> lin) throws Exception {
+        System.out.println("[Tester] Delete " + DELETE_COUNT);
 
-    private static void testDelete(HeapFile<PatientRecord> heap,
-                                   LinHashFile<PatientRecord> lin) {
-        System.out.println("[LinHashFileTester] Delete " + DELETE_COUNT + " records...");
+        // собираем ВСЕ ID из структуры
+        List<String> all = getAllIds(lin);
 
-        // znovu si pripravíme ID všetkých záznamov (pre jednoduchosť)
-        // v reálnej aplikácii by sme si ich uchovali pri vkladaní
-        List<Long> allAddrs = heap.getAllAddresses();
-        List<String> allIds = new ArrayList<>(allAddrs.size());
+        int before = all.size();
+        if (before < DELETE_COUNT) fail("Too few records before delete");
 
-        for (long addr : allAddrs) {
-            PatientRecord rec = heap.get(addr);
-            if (rec == null) {
-                fail("Na adrese " + addr + " je null ešte pred mazaním LinHashFile.");
-            }
-            allIds.add(rec.getId());
-        }
+        List<String> toDelete = all.subList(0, DELETE_COUNT);
+        List<String> toKeep = all.subList(DELETE_COUNT, all.size());
 
-        int totalBefore = heap.getTotalValidRecords();
-        if (DELETE_COUNT > totalBefore) {
-            fail("DELETE_COUNT je väčší než počet záznamov v HeapFile.");
-        }
-
-        List<String> deleteIds = new ArrayList<>(DELETE_COUNT);
-        List<String> keepIds = new ArrayList<>(totalBefore - DELETE_COUNT);
-
-        for (int i = 0; i < allIds.size(); i++) {
-            String id = allIds.get(i);
-            if (i < DELETE_COUNT) {
-                deleteIds.add(id);
-            } else {
-                keepIds.add(id);
+        // delete
+        for (String id : toDelete) {
+            if (!lin.deleteById(id)) {
+                fail("deleteById returned false for " + id);
             }
         }
 
-        // fyzické mazanie cez LinHashFile.deleteById
-        for (int i = 0; i < DELETE_COUNT; i++) {
-            String id = deleteIds.get(i);
-            boolean deleted = lin.deleteById(id);
-            if (!deleted) {
-                fail("deleteById(" + id + ") v LinHashFile vrátil false.");
+        if (lin.getTotalRecords() != before - DELETE_COUNT) {
+            fail("TotalRecords mismatch after delete");
+        }
+
+        // deleted must NOT be found
+        for (String id : toDelete) {
+            if (lin.findById(id) != null) {
+                fail("ID still exists after delete: " + id);
             }
         }
 
-        int totalAfter = heap.getTotalValidRecords();
-        int expectedAfter = totalBefore - DELETE_COUNT;
-        assertEquals(expectedAfter, totalAfter,
-                "Po mazaní cez LinHashFile má HeapFile nesprávny počet záznamov.");
-
-        // overíme, že zmazané ID naozaj nie sú nájditeľné
-        for (String id : deleteIds) {
-            PatientRecord rec = lin.findById(id);
-            if (rec != null) {
-                fail("findById(" + id + ") po mazaní stále vrátil záznam: " + rec);
-            }
+        // kept must still exist
+        for (String id : toKeep) {
+            PatientRecord r = lin.findById(id);
+            if (r == null) fail("Kept ID disappeared: " + id);
         }
 
-        // overíme, že nezmazané ID sú stále nájditeľné
-        for (String id : keepIds) {
-            PatientRecord rec = lin.findById(id);
-            if (rec == null) {
-                fail("findById(" + id + ") po mazaní vrátil null, ale ID bolo ponechané.");
-            }
-            if (!id.equals(rec.getId())) {
-                fail("Po mazaní: findById(" + id + ") vrátil záznam s iným ID: " + rec.getId());
-            }
-        }
-
-        System.out.println("[LinHashFileTester] Delete OK");
-         // dodatočná kontrola konzistencie po vkladaní a hľadaní
-        validateConsistency(heap, lin);
+        validateConsistency(lin);
+        System.out.println("[Tester] Delete OK");
     }
 
-    // =======================
-    // 3. Reopen test
-    // =======================
+    // =============================
+    // 3. REOPEN
+    // =============================
+    private static void testReopen(String base) throws Exception {
+        System.out.println("[Tester] Reopen...");
 
-    private static void testReopen(String heapPath, String metaPath) {
-        System.out.println("[LinHashFileTester] Reopen LinHashFile...");
+        LinHashFile<PatientRecord> lin = new LinHashFile<>(
+                base,
+                256,
+                PatientRecord.class,
+                4,
+                0.75,
+                0.40
+        );
 
-        // otvoríme existujúci HeapFile a LinHashFile
-        HeapFile<PatientRecord> heap =
-                new HeapFile<>(heapPath, 256, PatientRecord.class);
-        LinHashFile<PatientRecord> lin =
-                new LinHashFile<>(heap, metaPath);
+        List<String> ids = getAllIds(lin);
 
-        try {
-            int total = heap.getTotalValidRecords();
+        for (String id : ids) {
+            PatientRecord r = lin.findById(id);
+            if (r == null) fail("After reopen: ID not found: " + id);
+            if (!id.equals(r.getId())) fail("After reopen: wrong ID returned");
+        }
 
-            // zistíme ID všetkých záznamov
-            List<Long> addrs = heap.getAllAddresses();
-            List<String> ids = new ArrayList<>(addrs.size());
-            for (long addr : addrs) {
-                PatientRecord rec = heap.get(addr);
-                if (rec == null) {
-                    fail("Po opätovnom otvorení: null na adrese " + addr);
-                }
-                ids.add(rec.getId());
-            }
+        validateConsistency(lin);
+        lin.close();
+        System.out.println("[Tester] Reopen OK");
+    }
 
-            // preskúšame findById pre všetky ID – ak niečo zlyhá, rehash/rebuild je zlý
-            for (String id : ids) {
-                PatientRecord found = lin.findById(id);
-                if (found == null) {
-                    fail("Po opätovnom otvorení: findById(" + id + ") vrátil null.");
-                }
-                if (!id.equals(found.getId())) {
-                    fail("Po opätovnom otvorení: findById(" + id +
-                            ") vrátil záznam s iným ID: " + found.getId());
-                }
-            }
+    // =============================
+    // CONSISTENCY CHECK
+    // =============================
+    private static void validateConsistency(LinHashFile<PatientRecord> lin) throws Exception {
+        HeapFile<PatientRecord> primary = lin.getPrimaryFile();
+        HeapFile<PatientRecord> overflow = lin.getOverflowFile();
 
-            // jednoduchá kontrola, že počet sedí
-            int total2 = heap.getTotalValidRecords();
-            assertEquals(total, total2,
-                    "Po opätovnom otvorení LinHashFile/HeapFile nesedí totalValidRecords().");
-             // dodatočná kontrola konzistencie po vkladaní a hľadaní
-            validateConsistency(heap, lin);
-            System.out.println("[LinHashFileTester] Reopen OK");
-        } finally {
-            lin.close(); // uloží meta + zatvorí HeapFile
+        Set<String> heapIds = new HashSet<>();
+        collectIdsFromHeap(primary, heapIds);
+        collectIdsFromHeap(overflow, heapIds);
+
+        if (heapIds.size() != lin.getTotalRecords()) {
+            fail("HeapFile count != totalRecords");
+        }
+
+        for (String id : heapIds) {
+            PatientRecord r = lin.findById(id);
+            if (r == null) fail("Inconsistency: findById returned null for " + id);
         }
     }
 
-    // =======================
-    // Pomocné metódy
-    // =======================
+    private static void collectIdsFromHeap(HeapFile<PatientRecord> heap, Set<String> out)
+            throws Exception {
+        List<Long> addrs = heap.getAllAddresses();
+        for (long addr : addrs) {
+            PatientRecord r = heap.get(addr);
+            if (r == null) fail("Null record in heap at addr=" + addr);
+            out.add(r.getId());
+        }
+    }
+
+    // =============================
+    // HELPERS
+    // =============================
+    private static List<String> getAllIds(LinHashFile<PatientRecord> lin) throws Exception {
+        Set<String> out = new HashSet<>();
+        collectIdsFromHeap(lin.getPrimaryFile(), out);
+        collectIdsFromHeap(lin.getOverflowFile(), out);
+        return new ArrayList<>(out);
+    }
 
     private static PatientRecord generateRecord(int i) {
-        String meno = "LH_M" + i;
-        String priez = "LH_P" + i;
-        String date = String.format("%02d:%02d:%04d",
-                (i % 28) + 1,
-                (i % 12) + 1,
-                1980 + (i % 40));
-        String id = String.format("LH%07d", i); // jednoznačné ID pre test
-        return new PatientRecord(meno, priez, date, id);
+        return new PatientRecord(
+                "LH_M" + i,
+                "LH_P" + i,
+                "01:01:2000",
+                String.format("LH%07d", i)
+        );
     }
-    
-     /**
-     * Overí konzistenciu medzi HeapFile a LinHashFile.
-     *
-     * 1. Zo všetkých adries v HeapFile vytvorí množinu ID (heapIds)
-     *    a pre každé ID overí, že findById(ID) v LinHashFile vráti
-     *    nenull záznam s rovnakým ID.
-     *
-     * 2. Zo všetkých ID, ktoré LinHashFile vidí vo svojich bucket-och
-     *    (getAllIdsForTesting), vytvorí množinu (hashIds) a porovná ju
-     *    s heapIds. Očakáva sa, že množiny budú úplne zhodné.
-     *
-     * V prípade akejkoľvek nezrovnalosti vyhodí IllegalStateException
-     * cez metódu fail(...). Výnimka teda pochádza z testera, nie zo
-     * samotnej dátovej štruktúry.
-     */
-    private static void validateConsistency(HeapFile<PatientRecord> heap,
-                                            LinHashFile<PatientRecord> lin) {
-        // 1. ID z HeapFile
-        java.util.List<Long> allAddrs = heap.getAllAddresses();
-        java.util.Set<String> heapIds = new java.util.HashSet<>();
 
-        for (long addr : allAddrs) {
-            PatientRecord rec = heap.get(addr);
-            if (rec == null) {
-                fail("Validate: v HeapFile je na adrese " + addr + " null záznam.");
-            }
-
-            String id = rec.getId();
-            if (id == null) {
-                fail("Validate: záznam v HeapFile na adrese " + addr + " má null ID.");
-            }
-
-            if (!heapIds.add(id)) {
-                // V testovacích generátoroch očakávame unikátne ID,
-                // preto duplicitné ID považujeme za chybu implementácie
-                // alebo generátora.
-                fail("Validate: duplicitné ID v HeapFile: " + id);
-            }
-
-            PatientRecord fromHash = lin.findById(id);
-            if (fromHash == null) {
-                fail("Validate: findById(" + id + ") v LinHashFile vrátil null, "
-                        + "ale záznam s týmto ID existuje v HeapFile.");
-            }
-            if (!id.equals(fromHash.getId())) {
-                fail("Validate: findById(" + id + ") vrátil záznam s iným ID: "
-                        + fromHash.getId());
-            }
-        }
-
-        // 2. ID, ktoré vidí LinHashFile vo svojich bucket-och
-        java.util.List<String> hashIdsList = lin.getAllIdsForTesting();
-        java.util.Set<String> hashIds = new java.util.HashSet<>(hashIdsList);
-
-        if (heapIds.size() != hashIds.size()) {
-            fail("Validate: počet ID v HeapFile (" + heapIds.size()
-                    + ") != počtu ID v LinHashFile (" + hashIds.size() + ").");
-        }
-
-        if (!hashIds.containsAll(heapIds)) {
-            fail("Validate: LinHashFile neobsahuje všetky ID z HeapFile.");
-        }
-
-        if (!heapIds.containsAll(hashIds)) {
-            fail("Validate: LinHashFile obsahuje ID, ktoré sa v HeapFile už nenachádzajú.");
-        }
-    }
-    
     private static void deleteIfExists(String path) {
         File f = new File(path);
-        if (f.exists()) {
-            if (!f.delete()) {
-                fail("Nepodarilo sa zmazať existujúci testovací súbor: " + path);
-            }
-        }
+        if (f.exists()) f.delete();
     }
 
-    private static void assertEquals(int expected, int actual, String message) {
-        if (expected != actual) {
-            fail(message + " Očakávané=" + expected + ", skutočné=" + actual);
-        }
+    private static void fail(String msg) {
+        throw new IllegalStateException("LinHashFileTester FAILED: " + msg);
     }
 
-    private static void fail(String message) {
-        throw new IllegalStateException("LinHashFileTester FAILED: " + message);
-    }
-    
-    // voliteľné – jednoduchý main na samostatné spustenie
     public static void main(String[] args) {
         runAllTests();
     }

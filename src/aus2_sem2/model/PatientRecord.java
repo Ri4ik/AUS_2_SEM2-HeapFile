@@ -55,26 +55,30 @@ public class PatientRecord implements Record {
             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
             // meno
-            byte[] menoBytes = ByteUtils.toFixedBytes(meno, MENO_LEN);
-            int menoLen = Math.min(meno.length(), MENO_LEN);
+            String menoStr = (meno == null) ? "" : meno;
+            byte[] menoBytes = ByteUtils.toFixedBytes(menoStr, MENO_LEN);
+            int menoLen = Math.min(menoStr.length(), MENO_LEN);
             dos.writeByte(menoLen);
             dos.write(menoBytes);
 
             // priezvisko
-            byte[] priezBytes = ByteUtils.toFixedBytes(priezvisko, PRIEZ_LEN);
-            int priezLen = Math.min(priezvisko.length(), PRIEZ_LEN);
+            String priezStr = (priezvisko == null) ? "" : priezvisko;
+            byte[] priezBytes = ByteUtils.toFixedBytes(priezStr, PRIEZ_LEN);
+            int priezLen = Math.min(priezStr.length(), PRIEZ_LEN);
             dos.writeByte(priezLen);
             dos.write(priezBytes);
 
             // date
-            byte[] dateBytes = ByteUtils.toFixedBytes(date, DATE_LEN);
-            int dateLen = Math.min(date.length(), DATE_LEN);
+            String dateStr = (date == null) ? "" : date;
+            byte[] dateBytes = ByteUtils.toFixedBytes(dateStr, DATE_LEN);
+            int dateLen = Math.min(dateStr.length(), DATE_LEN);
             dos.writeByte(dateLen);
             dos.write(dateBytes);
 
             // id
-            byte[] idBytes = ByteUtils.toFixedBytes(id, ID_LEN);
-            int idLen = Math.min(id.length(), ID_LEN);
+            String idStr = (id == null) ? "" : id;
+            byte[] idBytes = ByteUtils.toFixedBytes(idStr, ID_LEN);
+            int idLen = Math.min(idStr.length(), ID_LEN);
             dos.writeByte(idLen);
             dos.write(idBytes);
 
@@ -85,7 +89,7 @@ public class PatientRecord implements Record {
         }
     }
 
-    /** Načítanie záznamu – číta dĺžku + fixné bajty pre každý reťazec. */
+    /** Načítanie záznamu – číta dĺžku + fixné bajty pre každý reťazec a dĺžku reálne používa. */
     @Override
     public void fromByteArray(byte[] data) {
         try {
@@ -93,28 +97,44 @@ public class PatientRecord implements Record {
             java.io.DataInputStream dis = new java.io.DataInputStream(bais);
 
             // meno
-            int menoLen = dis.readUnsignedByte(); // môžeme ignorovať, ale je uložený
+            int menoLen = dis.readUnsignedByte(); // počet platných znakov
             byte[] menoBytes = new byte[MENO_LEN];
             dis.readFully(menoBytes);
-            this.meno = ByteUtils.fromFixedBytes(menoBytes, 0, MENO_LEN);
+            String menoFull = ByteUtils.fromFixedBytes(menoBytes, 0, MENO_LEN);
+            if (menoLen < menoFull.length()) {
+                menoFull = menoFull.substring(0, menoLen);
+            }
+            this.meno = menoFull;
 
             // priezvisko
             int priezLen = dis.readUnsignedByte();
             byte[] priezBytes = new byte[PRIEZ_LEN];
             dis.readFully(priezBytes);
-            this.priezvisko = ByteUtils.fromFixedBytes(priezBytes, 0, PRIEZ_LEN);
+            String priezFull = ByteUtils.fromFixedBytes(priezBytes, 0, PRIEZ_LEN);
+            if (priezLen < priezFull.length()) {
+                priezFull = priezFull.substring(0, priezLen);
+            }
+            this.priezvisko = priezFull;
 
             // date
             int dateLen = dis.readUnsignedByte();
             byte[] dateBytes = new byte[DATE_LEN];
             dis.readFully(dateBytes);
-            this.date = ByteUtils.fromFixedBytes(dateBytes, 0, DATE_LEN);
+            String dateFull = ByteUtils.fromFixedBytes(dateBytes, 0, DATE_LEN);
+            if (dateLen < dateFull.length()) {
+                dateFull = dateFull.substring(0, dateLen);
+            }
+            this.date = dateFull;
 
             // id
             int idLen = dis.readUnsignedByte();
             byte[] idBytes = new byte[ID_LEN];
             dis.readFully(idBytes);
-            this.id = ByteUtils.fromFixedBytes(idBytes, 0, ID_LEN);
+            String idFull = ByteUtils.fromFixedBytes(idBytes, 0, ID_LEN);
+            if (idLen < idFull.length()) {
+                idFull = idFull.substring(0, idLen);
+            }
+            this.id = idFull;
 
         } catch (Exception e) {
             throw new IllegalStateException("Error during PatientRecord.fromByteArray()", e);

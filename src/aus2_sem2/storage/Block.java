@@ -1,6 +1,7 @@
 package aus2_sem2.storage;
 
 import aus2_sem2.model.Record;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -8,50 +9,62 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 
 /**
- * Jeden logický blok heap súboru na disku.
- * Uchováva pevný počet záznamov typu T v pamäti aj v serializovanej forme.
+ * Jeden logický blok súboru.
+ *
+ * Použitie:
+ *  - ako obyčajný blok v HeapFile (neutriedený súbor),
+ *  - ako blok primárneho alebo overflow súboru v lineárnom hešovaní.
+ *
+ * Formát na disku:
+ *   int validCount;                // počet platných záznamov v bloku
+ *   pre každý slot (0..capacity-1):
+ *      byte flag;                  // 1 = obsadený, 0 = prázdny
+ *      recordSize bajtov;          // obsah záznamu alebo nulové bajty
  */
 public class Block<T extends Record> {
 
-    private final int blockIndex;   // index bloku v súbore
-    private final int capacity;     // max. počet záznamov v bloku
-    private final int recordSize;   // veľkosť jedného záznamu v bajtoch
-    private final Class<T> recordClass; // typ záznamu kvôli vytváraniu inštancií
+    /** Index bloku v súbore (len pre debug; neukladá sa na disk). */
+    private final int blockIndex;
+    /** Kapacita bloku – max. počet záznamov. */
+    private final int capacity;
+    /** Veľkosť jedného záznamu v bajtoch. */
+    private final int recordSize;
+    /** Trieda záznamu. */
+    private final Class<T> recordClass;
 
-    private int validCount;         // počet platných (ne-null) záznamov
+    /** Počet platných záznamov v tomto bloku. */
+    private int validCount;
+
     @SuppressWarnings("unchecked")
-    private final T[] records;      // pole záznamov v danom bloku
+    private final T[] records;
 
     /**
-     * Konštruktor pre blok s možnosťou inicializácie ako „prázdny“.
-     */
-    public Block(int blockIndex, int capacity, int recordSize, Class<T> recordClass, boolean initializeEmpty) {
-        this.blockIndex = blockIndex;
-        this.capacity = capacity;
-        this.recordSize = recordSize;
-        this.recordClass = recordClass;
-        this.records = (T[]) new Record[capacity];
-
-        if (initializeEmpty) {
-            this.validCount = 0;
-            for (int i = 0; i < capacity; i++) {
-                this.records[i] = null;
-            }
-        }
-    }
-
-    /**
-     * Konštruktor používaný pri načítaní bloku zo súboru.
+     * Vytvorí úplne prázdny blok (všetky sloty sú null).
      */
     @SuppressWarnings("unchecked")
-    public Block(int blockIndex, int capacity, int recordSize, Class<T> recordClass) {
+    public Block(int blockIndex, int capacity, int recordSize, Class<T> recordClass, boolean empty) {
         this.blockIndex = blockIndex;
         this.capacity = capacity;
         this.recordSize = recordSize;
         this.recordClass = recordClass;
         this.records = (T[]) new Record[capacity];
         this.validCount = 0;
+
+        if (empty) {
+            for (int i = 0; i < capacity; i++) {
+                records[i] = null;
+            }
+        }
     }
+
+    /**
+     * Konštruktor používaný pri čítaní zo súboru (obsah sa doplní vo fromByteArray()).
+     */
+    public Block(int blockIndex, int capacity, int recordSize, Class<T> recordClass) {
+        this(blockIndex, capacity, recordSize, recordClass, false);
+    }
+
+    // --- základné gettre ---
 
     public int getBlockIndex() {
         return blockIndex;
@@ -69,7 +82,7 @@ public class Block<T extends Record> {
         return validCount;
     }
 
-    /** Blok je plný, ak nemá žiadny voľný slot. */
+    /** Blok je plný, ak nemá voľné sloty. */
     public boolean isFull() {
         return validCount >= capacity;
     }
@@ -79,10 +92,12 @@ public class Block<T extends Record> {
         return validCount == 0;
     }
 
+    // --- manipulácia so záznamami ---
+
     /**
      * Vloží záznam do prvého voľného slotu.
      *
-     * @return index slotu alebo -1, ak je blok plný
+     * @return index slotu alebo -1 ak je blok plný.
      */
     public int insert(T rec) {
         if (rec == null) {
@@ -101,25 +116,24 @@ public class Block<T extends Record> {
         return -1;
     }
 
-    /** Vráti záznam na danom indexe v bloku. */
-    public T getRecord(int index) {
-        if (index < 0 || index >= capacity) {
-            throw new IndexOutOfBoundsException("Record index out of range: " + index);
+    /** Vráti záznam v danom slote alebo null. */
+    public T getRecord(int slotIndex) {
+        if (slotIndex < 0 || slotIndex >= capacity) {
+            throw new IndexOutOfBoundsException("slotIndex out of range: " + slotIndex);
         }
-        return records[index];
+        return records[slotIndex];
     }
 
     /**
-     * Zmaže záznam na danom indexe (nastaví na null).
-     *
-     * @return true, ak bol záznam reálne prítomný a zmazaný
+     * Zmaže záznam v danom slote.
+     * @return true ak tam bol platný záznam a bol zmazaný.
      */
-    public boolean delete(int index) {
-        if (index < 0 || index >= capacity) {
-            throw new IndexOutOfBoundsException("Record index out of range: " + index);
+    public boolean delete(int slotIndex) {
+        if (slotIndex < 0 || slotIndex >= capacity) {
+            throw new IndexOutOfBoundsException("slotIndex out of range: " + slotIndex);
         }
-        if (records[index] != null) {
-            records[index] = null;
+        if (records[slotIndex] != null) {
+            records[slotIndex] = null;
             validCount--;
             return true;
         }
@@ -127,14 +141,44 @@ public class Block<T extends Record> {
     }
 
     /**
-     * Serializuje celý blok do poľa bajtov.
-     * Formát:
-     * <pre>
-     *   int validCount;
-     *   pre každý slot:
-     *     byte flag (1 = obsadený, 0 = prázdny)
-     *     recordSize bajtov (dáta záznamu alebo prázdne pole)
-     * </pre>
+     * Sekvenčné vyhľadanie podľa ID (pomocná metóda pre HeapFile / LinHash).
+     */
+    public T findById(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (int i = 0; i < capacity; i++) {
+            T r = records[i];
+            if (r != null && id.equals(r.getId())) {
+                return r;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Zmazanie prvého záznamu s daným ID.
+     */
+    public boolean deleteById(String id) {
+        if (id == null) {
+            return false;
+        }
+        for (int i = 0; i < capacity; i++) {
+            T r = records[i];
+            if (r != null && id.equals(r.getId())) {
+                records[i] = null;
+                validCount--;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // --- serializácia / deserializácia ---
+
+    /**
+     * Serializuje blok do poľa bajtov.
+     * Diskový formát: int validCount + (byte flag + recordSize bajtov) * capacity.
      */
     public byte[] toByteArray() {
         try {
@@ -151,24 +195,24 @@ public class Block<T extends Record> {
                     if (data.length != recordSize) {
                         throw new IllegalStateException(
                                 "Record serialized size (" + data.length +
-                                ") != expected recordSize (" + recordSize + ")");
+                                        ") != expected recordSize (" + recordSize + ")"
+                        );
                     }
                     dos.write(data);
                 } else {
                     dos.writeByte(0);
-                    byte[] empty = new byte[recordSize];
-                    dos.write(empty);
+                    dos.write(new byte[recordSize]);
                 }
             }
 
             return baos.toByteArray();
         } catch (IOException e) {
-            throw new IllegalStateException("Error during Block.toByteArray()", e);
+            throw new IllegalStateException("Error in Block.toByteArray()", e);
         }
     }
 
     /**
-     * Naplní blok z dodaného poľa bajtov v rovnakom formáte, ako vytvára toByteArray().
+     * Naplní blok z poľa bajtov v rovnakom formáte, ako vracia toByteArray().
      */
     public void fromByteArray(byte[] data) {
         try {
@@ -191,24 +235,20 @@ public class Block<T extends Record> {
                 }
             }
         } catch (IOException e) {
-            throw new IllegalStateException("Error during Block.fromByteArray()", e);
+            throw new IllegalStateException("Error in Block.fromByteArray()", e);
         }
     }
 
-    /**
-     * Vytvorí „prázdnu“ inštanciu záznamu typu T pomocou reflexie.
-     * Používa sa pri deserializácii z bajtového poľa.
-     */
     private T createEmptyRecord() {
         try {
             return recordClass.getDeclaredConstructor().newInstance();
         } catch (Exception e) {
-            throw new IllegalStateException("Cannot create instance of record class " + recordClass.getName(), e);
+            throw new IllegalStateException("Cannot create record instance " + recordClass.getName(), e);
         }
     }
 
     /**
-     * Textový debug výpis obsahu bloku (index, validCount a všetky sloty).
+     * Debug výpis obsahu bloku (ID záznamov alebo <empty>).
      */
     public String debugString() {
         StringBuilder sb = new StringBuilder();
